@@ -24,6 +24,7 @@ function shallowCopy(rec) {
     ringFilled: rec.ringFilled,
     tokenSeq: rec.tokenSeq,
     createdAt: rec.createdAt,
+    lastInputAt: rec.lastInputAt,
   };
 }
 
@@ -134,15 +135,33 @@ class PaneRegistry extends EventEmitter {
       ringFilled: false,
       tokenSeq: 0,
       createdAt: Date.now(),
+      lastInputAt: 0,
+      // initialPrompt is intentionally kept off shallowCopy so it never
+      // ships to the renderer via IPC events. main.js reads it via
+      // getInitialPrompt() and writes it to the pty directly.
+      initialPrompt: typeof opts.initialPrompt === 'string' && opts.initialPrompt.length > 0
+        ? opts.initialPrompt
+        : null,
     };
     this.#panes.set(paneId, record);
-    return shallowCopy(record);
+    const snapshot = shallowCopy(record);
+    this.emit('pane:register', snapshot);
+    return snapshot;
   }
 
   get(paneId) {
     if (!isPlainString(paneId)) return null;
     const rec = this.#panes.get(paneId);
     return rec ? shallowCopy(rec) : null;
+  }
+
+  // Stamp the moment the user (renderer) wrote into this pane's pty.
+  // Used by swarm orchestration to pick the active user pane when
+  // resolving userTerminalId — much more reliable than createdAt (a
+  // fresh-but-empty pane wins) or tokenSeq (only fed by headless ptys).
+  bumpInput(paneId) {
+    const rec = this.#panes.get(paneId);
+    if (rec) rec.lastInputAt = Date.now();
   }
 
   list(filter) {
@@ -265,6 +284,30 @@ class PaneRegistry extends EventEmitter {
     if (!this.#panes.has(paneId)) return;
     this.#panes.delete(paneId);
     this.emit('pane:closed', { paneId });
+  }
+
+  // Read the staged initial prompt for a pane. main.js calls this after
+  // the pty for the pane is created so it can write the prompt without
+  // routing it through renderer state.
+  getInitialPrompt(paneId) {
+    const rec = this.#panes.get(paneId);
+    return rec && rec.initialPrompt ? rec.initialPrompt : null;
+  }
+
+  // Stage / replace the initial prompt for an already-registered pane.
+  // Used by swarm orchestration when a pane was registered before its
+  // prompt could be built (e.g. orchestrator needs worker ids that don't
+  // exist until workers are spawned).
+  setInitialPrompt(paneId, prompt) {
+    const rec = this.#panes.get(paneId);
+    if (!rec) return false;
+    rec.initialPrompt = typeof prompt === 'string' && prompt.length > 0 ? prompt : null;
+    return true;
+  }
+
+  clearInitialPrompt(paneId) {
+    const rec = this.#panes.get(paneId);
+    if (rec) rec.initialPrompt = null;
   }
 
   size() {

@@ -21,6 +21,37 @@ const OWNER_LABELS = {
   agent:        'Worker',
 };
 
+// Warm "human seat" palette — visually orthogonal to all four team
+// accents so a glance can separate the human pane from the agent panes
+// without parsing badges. Used both for the USER badge and the optional
+// top-edge accent strip on user panes that are roots of an active swarm.
+const USER_HUE = {
+  accent: '#f4d28a',
+  soft:   'rgba(244,210,138,0.12)',
+  border: 'rgba(244,210,138,0.55)',
+  strong: 'rgba(244,210,138,0.85)',
+};
+
+export function getUserPaneStyle({ isSwarmRoot }) {
+  // Plain user panes get a thin warm top-edge cap; if they're acting as
+  // the root of an active swarm (i.e. an agent's spawnedBy chain ends
+  // here) we tint the full border so the visual link is unmistakable.
+  if (isSwarmRoot) {
+    return {
+      border: `1px solid ${USER_HUE.border}`,
+      boxShadow: `0 0 14px ${USER_HUE.soft}, inset 0 0 0 1px ${USER_HUE.border}`,
+      borderTop: `2px solid ${USER_HUE.strong}`,
+      accent: USER_HUE.accent,
+    };
+  }
+  return {
+    borderTop: `2px solid ${USER_HUE.strong}`,
+    accent: USER_HUE.accent,
+  };
+}
+
+export function getUserHue() { return USER_HUE; }
+
 export function getTeamTheme(teamId) {
   if (!teamId) return null;
   return TEAM_HUES[teamId] ?? null;

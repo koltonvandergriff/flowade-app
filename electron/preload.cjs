@@ -258,6 +258,29 @@ contextBridge.exposeInMainWorld('flowade', {
     },
   },
 
+  swarm: {
+    onPaneAdded: (callback) => {
+      const handler = (_, rec) => callback(rec);
+      ipcRenderer.on('swarm:pane-added', handler);
+      return () => ipcRenderer.removeListener('swarm:pane-added', handler);
+    },
+    onPaneRemoved: (callback) => {
+      const handler = (_, payload) => callback(payload);
+      ipcRenderer.on('swarm:pane-removed', handler);
+      return () => ipcRenderer.removeListener('swarm:pane-removed', handler);
+    },
+    onPaneState: (callback) => {
+      const handler = (_, payload) => callback(payload);
+      ipcRenderer.on('swarm:pane-state', handler);
+      return () => ipcRenderer.removeListener('swarm:pane-state', handler);
+    },
+    runs: {
+      list: () => ipcRenderer.invoke('swarm:listRuns'),
+      get: (runId) => ipcRenderer.invoke('swarm:getRun', runId),
+      getTranscript: (runId, terminalId) => ipcRenderer.invoke('swarm:getTranscript', { runId, terminalId }),
+    },
+  },
+
   window: {
     minimize: () => ipcRenderer.send('window:minimize'),
     maximize: () => ipcRenderer.send('window:maximize'),

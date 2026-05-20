@@ -1,4 +1,5 @@
 import { paneRegistry as defaultPaneRegistry } from './paneRegistry.js';
+import { resolveProvider, checkAvailable } from './providerRegistry.js';
 
 // Build a fresh paneId. ptyManager may also return one — if so we prefer
 // whatever ptyManager hands back. This is just a fallback.
@@ -33,7 +34,7 @@ function liteShape(rec) {
   };
 }
 
-export function buildHandlers({ paneRegistry, ptyManager }) {
+export function buildHandlers({ paneRegistry, ptyManager, spawnHeadlessPane }) {
   const registry = paneRegistry || defaultPaneRegistry;
 
   function requirePty() {
@@ -42,8 +43,6 @@ export function buildHandlers({ paneRegistry, ptyManager }) {
   }
 
   async function spawn(params) {
-    const pty = requirePty();
-    const provider = params && params.provider;
     const prompt = params && params.prompt;
     const workspace = params && params.workspace;
     const sessionName = params && params.sessionName;
@@ -51,13 +50,26 @@ export function buildHandlers({ paneRegistry, ptyManager }) {
     const teamId = params && params.teamId;
     const spawnedBy = params && params.spawnedBy;
 
-    // ptyManager.spawn may return a paneId, an object with .id, or nothing.
-    const spawnResult = await pty.spawn({ provider, prompt, workspace, sessionName });
-    let paneId;
-    if (typeof spawnResult === 'string') paneId = spawnResult;
-    else if (spawnResult && typeof spawnResult === 'object' && spawnResult.id) paneId = spawnResult.id;
-    else paneId = newPaneId();
+    // Resolve provider: explicit > parent pane > workspace's user pane >
+    // 'claude'. Surfaces a clear error if the resolved CLI isn't on PATH.
+    const provider = resolveProvider({
+      requested: params && params.provider,
+      parentPaneId: spawnedBy,
+      parentWorkspace: workspace,
+      paneRegistry: registry,
+      defaultProvider: 'claude',
+    });
+    const availability = await checkAvailable(provider);
+    if (!availability.available) {
+      throw new Error(`provider '${provider}' unavailable: ${availability.reason}`);
+    }
 
+    // The pty is created by the renderer's TerminalPane after it mounts
+    // (so the provider start command — `claude\r`, etc. — fires from the
+    // existing IPC path with onData listeners wired correctly). We just
+    // register the pane and stash the initial prompt; renderer will write
+    // it once the agent is ready.
+    const paneId = newPaneId();
     const rec = registry.register(paneId, {
       provider,
       sessionName,
@@ -65,13 +77,23 @@ export function buildHandlers({ paneRegistry, ptyManager }) {
       ownerType,
       teamId,
       spawnedBy,
+      // initialPrompt is staged on the record; spawnHeadlessPane reads
+      // it lazily inside its delayed write so this order works.
+      initialPrompt: typeof prompt === 'string' && prompt.length > 0 ? prompt : null,
     });
 
-    if (typeof prompt === 'string' && prompt.length > 0) {
-      try { await pty.write(paneId, prompt + '\n'); } catch (_) { /* best effort */ }
+    // MVP headless: main owns the pty. No UI tile, no renderer round-trip.
+    if (typeof spawnHeadlessPane === 'function') {
+      try { spawnHeadlessPane(paneId, { provider }); } catch (err) {
+        console.error('[swarm.terminal.spawn] headless spawn failed:', err?.message);
+      }
     }
 
-    return { terminalId: paneId, label: labelFor(rec) };
+    return {
+      terminalId: paneId,
+      label: labelFor(rec),
+      provider,
+    };
   }
 
   async function list(params) {
@@ -90,8 +112,18 @@ export function buildHandlers({ paneRegistry, ptyManager }) {
     const pty = requirePty();
     const terminalId = params && params.terminalId;
     const text = params && typeof params.text === 'string' ? params.text : '';
-    const submit = !!(params && params.submit);
-    await pty.write(terminalId, submit ? text + '\n' : text);
+    // Default to submit=true so orchestrator dispatch packets actually
+    // execute instead of sitting in the worker's input buffer waiting
+    // on a human Enter. Caller can pass `submit: false` for raw text.
+    const submit = params && params.submit === false ? false : true;
+    await pty.write(terminalId, text);
+    if (submit) {
+      // Enter as a SEPARATE keystroke after a settle delay — claude CLI
+      // bracketed-paste detector otherwise buffers the trailing \r with
+      // the paste content and the worker just stares at unsent text.
+      await new Promise((r) => setTimeout(r, 350));
+      await pty.write(terminalId, '\r');
+    }
     return { ok: true };
   }
 

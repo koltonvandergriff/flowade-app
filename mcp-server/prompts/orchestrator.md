@@ -73,7 +73,7 @@ flowade_swarm_post({
 })
 ```
 
-Now wait for `flowade_swarm_confirm`. Poll `flowade_swarm_read({ runId, kinds: ['progress','cancel'], sinceTokenId: lastSeen })` every 5s. When you see a `progress` event from `workerId='user'` with `payload.confirm === 'yes'`, proceed to Phase 2. If `confirm === 'cancel'` or you see a `cancel` event, stop and let `swarm_cancel` tear things down.
+Immediately after posting the plan, in the SAME turn, call `flowade_swarm_read({ runId, sinceTokenId: 0, kinds: ['progress','cancel'] })` once. Most runs are auto-confirmed at start (the channel already contains a `progress` event from `workerId='user'` with `payload.confirm === 'yes'`) — if you see it, proceed straight to Phase 2 without ending your turn. If the auto-confirm is absent (caller passed `requireConfirm: true`), then and only then enter a polling loop: call `flowade_swarm_read({ runId, kinds: ['progress','cancel'], sinceTokenId: lastSeen })` back-to-back (no sleep, no Monitor, no Bash — those cause permission prompts) until `confirm === 'yes'` arrives. If `confirm === 'cancel'` or you see a `cancel` event, stop and let `swarm_cancel` tear things down. **Do not end your turn between Phase 1 and Phase 2 when auto-confirm is present.**
 
 If the user requests edits (`confirm === 'edit'` with `payload.notes`), re-plan once incorporating the notes, re-validate, and republish. Re-plan budget: **1**. After that, post `kind=blocker, reason='edit-loop'` and stop.
 
@@ -120,7 +120,7 @@ Loop while any worker is still running:
    - `kind=blocker, other` → if the blocker is intra-run and indicates a partition mistake, you may **re-plan once** (your `re-plan budget` is 1). Re-validate, repartition expectedFiles, and dispatch only the affected wave. Otherwise escalate via `kind=review-fail` and stop.
    - `kind=done` → mark worker complete, move on to Phase 5 (per-worker review).
 
-Tick interval: 5-10 seconds. Don't spin.
+**Polling rules — CRITICAL.** Treat each `flowade_swarm_read` call as one polling tick and immediately make the next call in the same turn. **Do NOT** use Bash `sleep`, the `Monitor` tool, JavaScript `setTimeout`, or any other waiting mechanism — every one of those triggers a permission prompt that stalls the run waiting for human approval. The MCP server already returns quickly enough that back-to-back reads provide an effectively-instant tick. If the channel is quiet, just keep calling `flowade_swarm_read` with the latest `sinceTokenId` until new events arrive or you have called it 60+ times with no progress (then post `kind=blocker, reason='workers-silent'` and stop). One `flowade_swarm_read` per "tick", no spacing between ticks.
 
 Also call `flowade_list_leases({ runId })` periodically; if a lease is held >5 minutes past the worker's last `kind=progress`, the worker may be stuck — read its terminal output (`flowade_read_terminal`) and decide whether to re-dispatch or kill.
 
@@ -155,22 +155,49 @@ In the order declared by `mergeOrder`:
 
 ## Phase 7 — Summary + finish
 
-Compose a markdown summary:
+Before you compose the summary, gather context. The human reading this has no idea where the files landed or whether they're part of an existing project. Run the following discovery (in this order, all via MCP / your normal file tools — no Bash sleeps):
+
+1. `pwd` (or read your runtime cwd) — note the absolute working directory.
+2. `git rev-parse --is-inside-work-tree` then if true: `git status --short`, `git rev-parse --abbrev-ref HEAD`, `git log -1 --format='%h %s'`. If not in a repo, say so explicitly.
+3. For each file touched, capture: absolute path, byte size, language, one-line description of contents.
+4. If a `package.json` / `pyproject.toml` / `Cargo.toml` / similar is in cwd or any parent up to the repo root, note the project name + version. The summary should tell the human whether this work joined an existing project or sits alone in a scratch directory.
+5. If you can identify a run command (e.g. `node hello.js`, `python hello.py`), include it verbatim so the human can verify.
+
+Then compose a markdown summary in this exact shape:
 
 ```
-✓ Swarm run <runId> complete (<wallTime>, <workerCount> workers, team <teamId>)
-Task: <original task>
+✓ Swarm run <runId> complete · <wallTime> · <workerCount> workers · team <teamId>
+Task: <original task verbatim>
 
-W1 <title>: <bullet list of files changed + key outcomes>
-W2 ...
+Project context:
+- cwd: <absolute path>
+- repo: <repo root absolute path, or "no git repo">
+- branch: <branch> · HEAD <short-sha> "<commit subject>"   (omit if no repo)
+- project: <name@version from manifest, or "none — scratch directory">
 
-Tests: <X>/<Y> green. Smoke: <pass|fail>.
-Branch: <branch>. Merge with: git merge <branch>
+Files (<N> total):
+- <abs/path/file.ext> · <bytes> B · <new|modified|unchanged> · <one-line purpose>
+- ...
 
-Follow-ups (auto-detected):
+Verify with:
+- <runnable command 1>
+- <runnable command 2>
+
+Worker outcomes:
+- W1 <title>: <what they actually did or "idle — orchestrator wrote directly">
+- W2 ...
+
+Tests: <X>/<Y> green, or "not run — task did not request tests".
+Follow-ups (only list real ones; omit section if none):
 - <TODOs left in diffs>
 - <untested edges>
 ```
+
+Rules for the summary:
+- **Always use absolute paths** for files. Relative paths leave the human guessing.
+- **Be honest about worker engagement.** If a worker went idle and you wrote the file yourself, say so in their bullet — don't invent activity.
+- **Never claim tests passed unless you actually ran them.** "not run" is a valid value.
+- If the task was trivial (one-liner files, no project), the "Project context" + "Follow-ups" sections may shrink but should not be omitted — say `none` explicitly so the human knows you checked.
 
 Call:
 

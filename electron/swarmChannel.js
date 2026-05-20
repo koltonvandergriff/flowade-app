@@ -26,6 +26,11 @@ class SwarmChannel extends EventEmitter {
     this._buffer = new Map();
     // Map<runId, number> — next token id per run.
     this._nextToken = new Map();
+    // Map<runId, Promise> — per-run serialization. Concurrent posts to the
+    // same run chain off the tail so token allocation + insert is atomic.
+    // Without this, two posts can read the same `_nextToken` value and
+    // race to insert the same token_id, violating the unique constraint.
+    this._postChain = new Map();
   }
 
   _appendLocal(runId, event) {
@@ -43,9 +48,20 @@ class SwarmChannel extends EventEmitter {
     return buf[0].tokenId <= sinceTokenId + 1;
   }
 
-  async post({ runId, workerId, kind, payload }) {
-    if (!runId || typeof runId !== 'string') throw new Error('runId required');
-    if (!VALID_KINDS.has(kind)) throw new Error(`invalid kind: ${kind}`);
+  async _resyncNextToken(runId) {
+    const { data, error } = await supabase
+      .from('swarm_channel_events')
+      .select('token_id')
+      .eq('run_id', runId)
+      .order('token_id', { ascending: false })
+      .limit(1);
+    if (error) throw new Error(error.message || String(error));
+    const maxToken = data && data.length > 0 ? Number(data[0].token_id) : 0;
+    this._nextToken.set(runId, maxToken);
+    return maxToken;
+  }
+
+  async _postOnce({ runId, workerId, kind, payload }) {
     const next = (this._nextToken.get(runId) || 0) + 1;
     this._nextToken.set(runId, next);
     const postedAt = new Date().toISOString();
@@ -61,9 +77,14 @@ class SwarmChannel extends EventEmitter {
       .from('swarm_channel_events')
       .insert(row);
     if (error) {
-      // Roll back token counter so the same id can be retried.
+      // Roll back counter; safe under per-runId mutex because no
+      // concurrent post can have grabbed a higher token in this process.
       this._nextToken.set(runId, next - 1);
-      throw new Error(error.message || String(error));
+      const msg = error.message || String(error);
+      const isDupKey = /duplicate key|swarm_channel_events_run_id_token_id_key|unique constraint/i.test(msg);
+      const err = new Error(msg);
+      err.isDupKey = isDupKey;
+      throw err;
     }
     const event = rowToEvent(row);
     this._appendLocal(runId, event);
@@ -71,6 +92,34 @@ class SwarmChannel extends EventEmitter {
     this.emit(`event:${kind}`, event);
     this.emit(`event:run:${runId}`, event);
     return { ok: true, tokenId: next, postedAt };
+  }
+
+  async post({ runId, workerId, kind, payload }) {
+    if (!runId || typeof runId !== 'string') throw new Error('runId required');
+    if (!VALID_KINDS.has(kind)) throw new Error(`invalid kind: ${kind}`);
+    const prev = this._postChain.get(runId) || Promise.resolve();
+    const next = prev
+      .catch(() => { /* swallow upstream errors; this post is independent */ })
+      .then(async () => {
+        try {
+          return await this._postOnce({ runId, workerId, kind, payload });
+        } catch (err) {
+          // Token allocator drifted out of sync with DB (process restart,
+          // another writer, or stale local counter). Resync from DB and
+          // retry once.
+          if (err && err.isDupKey) {
+            await this._resyncNextToken(runId);
+            return this._postOnce({ runId, workerId, kind, payload });
+          }
+          throw err;
+        }
+      });
+    this._postChain.set(runId, next);
+    // Keep the chain bounded — drop ref once settled so we don't leak.
+    next.finally(() => {
+      if (this._postChain.get(runId) === next) this._postChain.delete(runId);
+    }).catch(() => {});
+    return next;
   }
 
   async read({ runId, sinceTokenId = 0, kinds = null, limit = 200 }) {

@@ -1,4 +1,4 @@
-import { useState, useCallback, useContext, useEffect, useRef } from 'react';
+import { useMemo, useState, useCallback, useContext, useEffect, useRef } from 'react';
 import { FONTS, LAYOUTS } from '../lib/constants';
 import { useTheme } from '../hooks/useTheme';
 import { isGlasshouseEnabled } from '../lib/glasshouseTheme';
@@ -6,7 +6,7 @@ import { WorkspaceContext } from '../contexts/WorkspaceContext';
 import { SettingsContext } from '../contexts/SettingsContext';
 import TerminalPane from './TerminalPane';
 import PaneBadge from './swarm/PaneBadge';
-import { getSwarmPaneStyle } from '../lib/swarmTheme';
+import { getSwarmPaneStyle, getTeamTheme, getUserPaneStyle, getUserHue } from '../lib/swarmTheme';
 import ResizeHandle from './ResizeHandle';
 import TerminalWizardGlasshouse from './glasshouse/TerminalWizardGlasshouse';
 import MassCloseDialogGlasshouse from './glasshouse/MassCloseDialogGlasshouse';
@@ -21,12 +21,55 @@ export default function TerminalGrid({ dangerFlags, onToggleDanger }) {
   const [dragId, setDragId] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
   const [focusedId, setFocusedId] = useState(null);
+  const [hoveredId, setHoveredId] = useState(null);
   const [paneSizes, setPaneSizes] = useState(null);
   const gridRef = useRef(null);
 
   const layout = activeData?.layout || '2x1';
   const workspaceName = activeData?.name || 'Workspace';
   const terminals = activeData?.terminals || [];
+
+  // Build a swarm pane → root user pane map. Workers' `spawnedBy` points
+  // at their orchestrator; orchestrator's `spawnedBy` is the user pane
+  // that called flowade_swarm_start. Walking the chain gives us a single
+  // teamRoot id per swarm pane so the UI can draw "← from <user>" badges
+  // and team-wide hover glows without re-traversing per render.
+  const teamRoot = useMemo(() => {
+    const byId = new Map(terminals.map((t) => [t.id, t]));
+    const cache = new Map();
+    const walk = (id, seen = new Set()) => {
+      if (!id || seen.has(id)) return null;
+      seen.add(id);
+      if (cache.has(id)) return cache.get(id);
+      const t = byId.get(id);
+      if (!t) return null;
+      const root = (!t.ownerType || t.ownerType === 'user') ? t.id : walk(t.spawnedBy, seen);
+      cache.set(id, root);
+      return root;
+    };
+    const out = new Map();
+    for (const t of terminals) out.set(t.id, walk(t.id));
+    return out;
+  }, [terminals]);
+
+  // Team-wide highlight: hovering any pane lights up every pane sharing
+  // the same root user pane (one level deeper than teamId, so even
+  // multi-swarm setups stay disambiguated).
+  const highlightedRoot = hoveredId ? teamRoot.get(hoveredId) : null;
+
+  // Reverse index: which user panes are currently acting as the root of
+  // at least one swarm pane. Lets the renderer paint the warm-tint
+  // border on "active" user panes without paying a per-render scan.
+  const activeRootIds = useMemo(() => {
+    const set = new Set();
+    for (const t of terminals) {
+      if (t.ownerType && t.ownerType !== 'user') {
+        const r = teamRoot.get(t.id);
+        if (r) set.add(r);
+      }
+    }
+    return set;
+  }, [terminals, teamRoot]);
 
   // Compose display labels as Workspace:Provider:SessionName with a :N
   // suffix only when the same combo appears more than once. sessionName
@@ -290,19 +333,105 @@ export default function TerminalGrid({ dangerFlags, onToggleDanger }) {
   }
 
   const renderPane = (t, style) => {
-    // Swarm-spawned panes carry ownerType + teamId. Plain user panes
-    // have neither — getSwarmPaneStyle returns null, badge renders null,
-    // and the wrapper looks exactly like before.
+    // Three pane treatments live in the same grid:
+    //   - user panes get a warm gold top-cap (and full warm border when
+    //     they're the active root of a swarm). They wear a USER badge.
+    //   - swarm panes get a team-colored ring + role badge + "from"
+    //     footer linking back to their root user pane.
+    //   - bare user panes (no swarm) read as a plain glass tile.
+    const isSwarmPane = !!(t.ownerType && t.ownerType !== 'user');
+    const isUserPane = !isSwarmPane;
+    const isUserActiveRoot = isUserPane && activeRootIds.has(t.id);
     const swarmStyle = getSwarmPaneStyle({ ownerType: t.ownerType, teamId: t.teamId });
+    const userStyle = isUserPane ? getUserPaneStyle({ isSwarmRoot: isUserActiveRoot }) : null;
+    const userHue = isUserPane ? getUserHue() : null;
+    const rootId = teamRoot.get(t.id);
+    const inHoveredTeam = !!(highlightedRoot && rootId && highlightedRoot === rootId && hoveredId !== t.id);
+    const theme = isSwarmPane ? getTeamTheme(t.teamId) : null;
+    // Look up the spawning user pane so we can show "from <name>" on
+    // swarm panes. Walks to the team root (a user pane id) via teamRoot.
+    const rootTerm = isSwarmPane && rootId && rootId !== t.id ? terminals.find((x) => x.id === rootId) : null;
+    const rootLabel = rootTerm ? (composed.get(rootTerm.id)?.session || rootTerm.sessionName || rootTerm.label || 'user') : null;
+
+    // Cross-team highlight when the user is hovering a sibling. Layered
+    // over the existing swarmStyle so the team accent reads through.
+    const highlightOutline = inHoveredTeam && theme
+      ? { outline: `2px solid ${theme.accent}`, outlineOffset: 2 }
+      : null;
+    // The hovered pane itself gets a slightly more emphatic team ring so
+    // the eye lands on the origin of the highlight cluster.
+    const selfHoverGlow = isSwarmPane && hoveredId === t.id && theme
+      ? { boxShadow: `${swarmStyle?.boxShadow || ''}, 0 0 0 2px ${theme.accent}` }
+      : null;
+
     return (
     <div
       key={t.id}
-      style={{ position: 'relative', ...(swarmStyle ? { borderRadius: 12, ...swarmStyle } : {}), ...style }}
+      style={{
+        position: 'relative',
+        ...(swarmStyle ? { borderRadius: 12, ...swarmStyle } : {}),
+        ...(userStyle ? { borderRadius: 12, ...userStyle } : {}),
+        ...(highlightOutline || {}),
+        ...(selfHoverGlow || {}),
+        transition: 'outline-color 160ms ease, box-shadow 200ms ease, border-color 200ms ease',
+        ...style,
+      }}
       onClick={() => setFocusedId(t.id)}
+      onMouseEnter={() => setHoveredId(t.id)}
+      onMouseLeave={() => setHoveredId((curr) => (curr === t.id ? null : curr))}
     >
-      {(t.ownerType && t.ownerType !== 'user') ? (
+      {isSwarmPane ? (
         <div style={{ position: 'absolute', top: 6, right: 10, zIndex: 5, pointerEvents: 'none' }}>
           <PaneBadge ownerType={t.ownerType} teamId={t.teamId} workerIndex={t.workerIndex} />
+        </div>
+      ) : null}
+      {isUserPane ? (
+        // USER chip sits top-left so it never collides with the pane's
+        // built-in title bar status badges (DONE / BUSY) in the top-right.
+        // Slightly raised contrast when this user pane is acting as the
+        // root of an active swarm so the human can see at-a-glance which
+        // tab the agents will report back to.
+        <div style={{
+          position: 'absolute', top: 6, left: 10, zIndex: 5,
+          pointerEvents: 'none',
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+          padding: '3px 8px 3px 7px',
+          fontFamily: fc,
+          fontSize: 10, fontWeight: 700, letterSpacing: 0.6,
+          color: userHue.accent,
+          background: isUserActiveRoot ? userHue.soft : 'rgba(244,210,138,0.06)',
+          border: `1px solid ${isUserActiveRoot ? userHue.border : 'rgba(244,210,138,0.30)'}`,
+          borderRadius: 999,
+          textTransform: 'uppercase',
+          userSelect: 'none',
+          backdropFilter: 'blur(6px)',
+        }}>
+          <span aria-hidden style={{ fontSize: 11, lineHeight: 1 }}>👤</span>
+          <span>User{isUserActiveRoot ? ' · root' : ''}</span>
+        </div>
+      ) : null}
+      {isSwarmPane && rootLabel ? (
+        // Footer link badge: "← from <user-pane-session>". Sits in the
+        // bottom-right corner with team-tinted chrome. Pointer-events
+        // disabled so xterm selection still works through it.
+        <div style={{
+          position: 'absolute', bottom: 8, right: 10, zIndex: 5,
+          pointerEvents: 'none',
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+          padding: '3px 8px 3px 7px',
+          fontFamily: fc,
+          fontSize: 10, fontWeight: 600, letterSpacing: 0.4,
+          color: theme?.accent || '#9adcff',
+          background: theme?.soft || 'rgba(94,197,255,0.12)',
+          border: `1px solid ${theme?.border || 'rgba(94,197,255,0.45)'}`,
+          borderRadius: 6,
+          textTransform: 'uppercase',
+          userSelect: 'none',
+          backdropFilter: 'blur(6px)',
+        }}>
+          <span aria-hidden style={{ opacity: 0.85 }}>↩</span>
+          <span style={{ opacity: 0.6, fontWeight: 500 }}>from</span>
+          <span>{rootLabel}</span>
         </div>
       ) : null}
       {t.pending ? (
