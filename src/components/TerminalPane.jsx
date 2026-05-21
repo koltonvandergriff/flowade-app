@@ -435,6 +435,28 @@ export default function TerminalPane({
   // upstream and shouldn't appear in the edit field.
   const [renameVal, setRenameVal] = useState(sessionName || label);
   const [inputVal, setInputVal] = useState('');
+  // Agent-owned panes (orchestrator + worker) are read-only by default —
+  // keystrokes in xterm and the bottom input box are blocked so a human
+  // looking at the run doesn't accidentally derail it. The hamburger has
+  // a "Force input (advanced)" toggle that unlocks the pane when the
+  // human knows what they're doing. State lives here, not in props, so a
+  // misclick doesn't leak across pane remounts.
+  const [forceInput, setForceInput] = useState(false);
+  const isAgentOwned = swarmIdentity?.ownerType === 'orchestrator' || swarmIdentity?.ownerType === 'agent';
+  const inputLocked = isAgentOwned && !forceInput;
+  const inputLockedReadRef = useRef(inputLocked);
+  useEffect(() => { inputLockedReadRef.current = inputLocked; }, [inputLocked]);
+
+  // Propagate the lock to xterm at runtime so toggling Force input
+  // without remounting the pane actually re-enables stdin + the cursor.
+  useEffect(() => {
+    const term = xtermRef.current;
+    if (!term || typeof term.options !== 'object') return;
+    try {
+      term.options.disableStdin = inputLocked;
+      term.options.cursorBlink = !inputLocked;
+    } catch (_) { /* xterm option setter not available on older versions */ }
+  }, [inputLocked]);
   const [promptY, setPromptY] = useState(null);
   const promptTimerRef = useRef(null);
   const inputStartPosRef = useRef({ x: 0, y: 0 });
@@ -600,6 +622,11 @@ export default function TerminalPane({
   });
 
   const handleInputSend = useCallback(async () => {
+    // Belt-and-braces: even if the bottom input box is rendered (e.g. on
+    // a user pane that just got its identity flipped at runtime), drop
+    // sends when the agent pane is locked so a stray keystroke can't
+    // reach the agent's pty.
+    if (inputLockedReadRef.current) return;
     if (isApiProvider) {
       const text = inputVal.trim();
       if (!text && !attachedImages.length) return;
@@ -673,12 +700,16 @@ export default function TerminalPane({
     }
     if (!termRef.current) return;
 
+    // Agent panes boot with stdin disabled + cursor blink off so the
+    // pane reads visually as read-only. The hamburger Force-input toggle
+    // flips both at runtime via the `inputLocked` effect below.
     const term = new Terminal({
       theme: terminalTheme,
       fontFamily: FONTS.mono,
       fontSize,
-      cursorBlink: true,
+      cursorBlink: !inputLocked,
       cursorStyle: 'bar',
+      disableStdin: inputLocked,
       allowProposedApi: true,
     });
 
@@ -899,6 +930,10 @@ export default function TerminalPane({
     })();
 
     term.onData((data) => {
+      // Agent panes are read-only unless the user has flipped the Force
+      // input toggle — drop the keystroke entirely so it never reaches
+      // the pty and the orchestrator's state stays consistent.
+      if (inputLockedReadRef.current) return;
       window.flowade?.terminal.write(id, data);
       inputLockedRef.current = true;
       if (data === '\r' || data === '\n') {
@@ -1062,6 +1097,21 @@ export default function TerminalPane({
         )}
 
         <RoleChip identity={swarmIdentity} />
+
+        {isAgentOwned && forceInput && (
+          <span
+            title="Force input is ON — keystrokes will reach this agent's pty. Disable from the hamburger menu."
+            style={{
+              fontSize: 8, fontWeight: 700,
+              padding: '2px 6px', borderRadius: 99, fontFamily: fc,
+              background: `${colors.status.warning}18`, color: colors.status.warning,
+              letterSpacing: 0.5, border: `1px solid ${colors.status.warning}40`,
+              flexShrink: 0, lineHeight: 1.2,
+            }}
+          >
+            ⚠ FORCE INPUT ON
+          </span>
+        )}
 
         {isRenaming ? (
           <input
@@ -1236,6 +1286,24 @@ export default function TerminalPane({
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" /></svg>
                 Change folder
               </button>
+
+              {isAgentOwned && (
+                <button onClick={() => { setForceInput((f) => !f); setMoreMenuOpen(false); }} style={{
+                  all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
+                  width: '100%', padding: '6px 10px', borderRadius: 4, fontSize: 11, fontFamily: fb,
+                  color: forceInput ? colors.status.warning : colors.text.secondary,
+                  transition: 'background .1s', boxSizing: 'border-box',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = colors.bg.overlay; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                title="Bypass the read-only lock on this agent pane. Use only when you need to manually intervene.">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                    <path d={forceInput ? 'M7 11V7a5 5 0 0110 0' : 'M7 11V7a5 5 0 019.9-1'} />
+                  </svg>
+                  {forceInput ? 'Disable force input' : 'Force input (advanced)'}
+                </button>
+              )}
 
               {!isApiProvider && (
                 <button onClick={() => { setMode((m) => m === 'usage' ? 'tokens' : 'usage'); setMoreMenuOpen(false); }} style={{
@@ -1536,8 +1604,11 @@ export default function TerminalPane({
         </div>
       )}
 
-      {/* Bottom bar — only for API providers (terminal has floating buttons) */}
-      {isApiProvider && (
+      {/* Bottom bar — only for API providers (terminal has floating
+          buttons). Hidden for agent-owned panes so the user can't
+          accidentally inject into the agent's chat thread; the Force
+          input toggle restores it. */}
+      {isApiProvider && !inputLocked && (
         <>
           {attachedImages.length > 0 && (
             <div style={{
