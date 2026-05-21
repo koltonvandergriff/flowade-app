@@ -5,17 +5,25 @@
 //   - window.flowade.swarm.runs.get(runId)     → meta + transcript ids
 //   - window.flowade.swarm.runs.replayChannel(runId) → DB events
 //   - window.flowade.swarm.runs.getTranscript(runId, terminalId) → log
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const FONT_DISP = 'var(--gh-font-display, "Outfit", sans-serif)';
 const FONT_TECH = 'var(--gh-font-techno, "Chakra Petch", sans-serif)';
 const FONT_MONO = 'var(--gh-font-mono, "JetBrains Mono", monospace)';
 
 const STATUS_META = {
-  'done':              { label: 'Done',       color: '#58e0a8', bg: 'rgba(88,224,168,0.10)', border: 'rgba(88,224,168,0.32)' },
-  'cancelled':         { label: 'Cancelled',  color: '#ff8b8b', bg: 'rgba(255,139,139,0.08)', border: 'rgba(255,139,139,0.32)' },
-  'planning':          { label: 'Planning',   color: '#ffd166', bg: 'rgba(255,209,102,0.08)', border: 'rgba(255,209,102,0.32)' },
-  'awaiting-confirm':  { label: 'Awaiting',   color: '#94a3b8', bg: 'rgba(148,163,184,0.10)', border: 'rgba(148,163,184,0.32)' },
+  'done':               { label: 'Done',        color: '#58e0a8', bg: 'rgba(88,224,168,0.10)',  border: 'rgba(88,224,168,0.32)' },
+  'done-with-warnings': { label: 'Warnings',    color: '#ffd166', bg: 'rgba(255,209,102,0.10)', border: 'rgba(255,209,102,0.32)' },
+  'cancelled':          { label: 'Cancelled',   color: '#ff8b8b', bg: 'rgba(255,139,139,0.08)', border: 'rgba(255,139,139,0.32)' },
+  'planning':           { label: 'Planning',    color: '#ffd166', bg: 'rgba(255,209,102,0.08)', border: 'rgba(255,209,102,0.32)' },
+  'awaiting-confirm':   { label: 'Awaiting',    color: '#94a3b8', bg: 'rgba(148,163,184,0.10)', border: 'rgba(148,163,184,0.32)' },
+  'dispatching':        { label: 'Dispatching', color: '#a78bfa', bg: 'rgba(167,139,250,0.10)', border: 'rgba(167,139,250,0.32)' },
+  'working':            { label: 'Working',     color: '#4de6f0', bg: 'rgba(77,230,240,0.10)',  border: 'rgba(77,230,240,0.32)' },
+  'reviewing':          { label: 'Reviewing',   color: '#4de6f0', bg: 'rgba(77,230,240,0.10)',  border: 'rgba(77,230,240,0.32)' },
+  'summarizing':        { label: 'Summarizing', color: '#4de6f0', bg: 'rgba(77,230,240,0.10)',  border: 'rgba(77,230,240,0.32)' },
+  'failed':             { label: 'Failed',      color: '#ff8b8b', bg: 'rgba(255,139,139,0.10)', border: 'rgba(255,139,139,0.40)' },
+  'crashed':            { label: 'Crashed',     color: '#ff8b8b', bg: 'rgba(255,139,139,0.10)', border: 'rgba(255,139,139,0.40)' },
+  'unknown':            { label: '—',           color: '#4a5168', bg: 'rgba(255,255,255,0.04)', border: 'rgba(255,255,255,0.08)' },
 };
 
 const KIND_META = {
@@ -31,33 +39,136 @@ const KIND_META = {
   finish:       { icon: '🏁', color: '#58e0a8', label: 'Finish' },
 };
 
+const TERMINAL_STATUSES = new Set(['done', 'done-with-warnings', 'cancelled', 'failed', 'crashed']);
+
+const SORT_OPTIONS = [
+  { id: 'newest',   label: 'Newest first' },
+  { id: 'oldest',   label: 'Oldest first' },
+  { id: 'duration', label: 'Longest duration' },
+  { id: 'workers',  label: 'Most workers' },
+];
+
+function sortRuns(rows, mode) {
+  const out = [...rows];
+  if (mode === 'oldest') {
+    out.sort((a, b) => (a.mtime || 0) - (b.mtime || 0));
+  } else if (mode === 'duration') {
+    out.sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0));
+  } else if (mode === 'workers') {
+    out.sort((a, b) => (b.workerCount || 0) - (a.workerCount || 0));
+  } else {
+    // newest first — list already arrives that way from main but enforce.
+    out.sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+  }
+  return out;
+}
+
 export default function SwarmRunsGlasshouse() {
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [filter, setFilter] = useState('all'); // all | done | cancelled | running
+  const [sortMode, setSortMode] = useState('newest');
+  const [searchRaw, setSearchRaw] = useState('');
+  const [search, setSearch] = useState('');
+  const searchRef = useRef(null);
 
-  const reload = async () => {
+  const reload = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const rows = await window.flowade?.swarm?.runs?.list?.();
-      const arr = Array.isArray(rows) ? rows : [];
-      setRuns(arr);
-      if (!selectedId && arr.length > 0) setSelectedId(arr[0].runId);
+      if (!Array.isArray(rows)) {
+        // Treat null/undefined as a soft failure — the user pane wasn't
+        // bridged, or the on-disk store hasn't been initialized yet.
+        setRuns([]);
+        if (rows === null || rows === undefined) {
+          setLoadError('Swarm runs IPC returned no data. The bridge may not be running.');
+        }
+        return;
+      }
+      setRuns(rows);
+      if (!selectedId && rows.length > 0) setSelectedId(rows[0].runId);
+    } catch (err) {
+      setRuns([]);
+      setLoadError(err?.message || String(err));
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedId]);
 
   useEffect(() => { reload(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filtered = useMemo(() => {
-    if (filter === 'all') return runs;
-    if (filter === 'running') return runs.filter(r => r.status !== 'done' && r.status !== 'cancelled');
-    return runs.filter(r => r.status === filter);
-  }, [runs, filter]);
+  // Debounce search box at 100ms so the master list doesn't thrash on
+  // every keystroke. Tracks two pieces of state — `searchRaw` is what
+  // the input renders, `search` is what the memo reads.
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchRaw.trim().toLowerCase()), 100);
+    return () => clearTimeout(t);
+  }, [searchRaw]);
 
-  const selected = useMemo(() => runs.find(r => r.runId === selectedId) || null, [runs, selectedId]);
+  const visible = useMemo(() => {
+    let rows = runs;
+    if (filter !== 'all') {
+      if (filter === 'running') {
+        rows = rows.filter(r => !TERMINAL_STATUSES.has(r?.status));
+      } else if (filter === 'done') {
+        // Group both clean done + done-with-warnings under the same pill.
+        rows = rows.filter(r => r?.status === 'done' || r?.status === 'done-with-warnings');
+      } else {
+        rows = rows.filter(r => r?.status === filter);
+      }
+    }
+    if (search) {
+      rows = rows.filter(r => {
+        const rid = (r?.runId || '').toLowerCase();
+        const task = (r?.task || '').toLowerCase();
+        return rid.includes(search) || task.includes(search);
+      });
+    }
+    return sortRuns(rows, sortMode);
+  }, [runs, filter, sortMode, search]);
+
+  // Keyboard nav: ↑/↓ change selection inside the master list; `/`
+  // focuses search; `r` reloads. Inputs and textareas are left alone so
+  // typing 'r' inside the search box isn't hijacked.
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea') {
+        if (e.key === 'Escape' && e.target === searchRef.current) {
+          setSearchRaw('');
+          e.target.blur();
+        }
+        return;
+      }
+      if (e.key === '/') {
+        e.preventDefault();
+        searchRef.current?.focus();
+        return;
+      }
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        reload();
+        return;
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (visible.length === 0) return;
+        e.preventDefault();
+        const idx = Math.max(0, visible.findIndex(r => r.runId === selectedId));
+        const next = e.key === 'ArrowDown'
+          ? Math.min(visible.length - 1, idx + 1)
+          : Math.max(0, idx - 1);
+        const target = visible[next];
+        if (target) setSelectedId(target.runId);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [visible, selectedId, reload]);
+
+  const selected = useMemo(() => runs.find(r => r?.runId === selectedId) || null, [runs, selectedId]);
 
   return (
     <div style={p.root}>
@@ -71,20 +182,62 @@ export default function SwarmRunsGlasshouse() {
           <FilterPill active={filter === 'done'}      onClick={() => setFilter('done')}>Done</FilterPill>
           <FilterPill active={filter === 'cancelled'} onClick={() => setFilter('cancelled')}>Cancelled</FilterPill>
           <FilterPill active={filter === 'running'}   onClick={() => setFilter('running')}>Running</FilterPill>
-          <button style={p.refreshBtn} onClick={reload} title="Reload runs" aria-label="Reload">↻</button>
+          <select
+            value={sortMode}
+            onChange={(e) => setSortMode(e.target.value)}
+            style={p.sortSelect}
+            title="Sort order"
+          >
+            {SORT_OPTIONS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
+          <button style={p.refreshBtn} onClick={reload} title="Reload runs (r)" aria-label="Reload">↻</button>
         </div>
+      </div>
+
+      <div style={p.searchRow}>
+        <input
+          ref={searchRef}
+          value={searchRaw}
+          onChange={(e) => setSearchRaw(e.target.value)}
+          placeholder="Search runId or task (press / to focus, Esc to clear)"
+          style={p.searchInput}
+        />
+        {searchRaw && (
+          <button type="button" onClick={() => setSearchRaw('')} style={p.searchClear} title="Clear">×</button>
+        )}
       </div>
 
       <div style={p.body}>
         <aside style={p.listCol}>
-          {loading && filtered.length === 0 && <div style={p.empty}>Loading…</div>}
-          {!loading && filtered.length === 0 && (
-            <div style={p.empty}>
-              No runs match this filter.<br/>
-              Spawn a swarm from any claude pane with <code style={p.code}>flowade_swarm_start</code>.
+          {loading && runs.length === 0 && (
+            <>
+              <SkeletonRow />
+              <SkeletonRow />
+              <SkeletonRow />
+              <SkeletonRow />
+            </>
+          )}
+
+          {!loading && loadError && (
+            <div style={p.errorBox}>
+              <div style={p.errorTitle}>Couldn't load runs</div>
+              <div style={p.errorBody}>{loadError}</div>
+              <button onClick={reload} style={p.errorRetry}>Retry</button>
             </div>
           )}
-          {filtered.map(run => (
+
+          {!loading && !loadError && runs.length === 0 && (
+            <EmptyZero />
+          )}
+
+          {!loading && !loadError && runs.length > 0 && visible.length === 0 && (
+            <div style={p.empty}>
+              No runs match this filter or search.<br/>
+              <button onClick={() => { setFilter('all'); setSearchRaw(''); }} style={p.linkBtn}>Clear filters</button>
+            </div>
+          )}
+
+          {visible.map(run => (
             <RunRow
               key={run.runId}
               run={run}
@@ -104,13 +257,56 @@ export default function SwarmRunsGlasshouse() {
   );
 }
 
+// Loading skeleton — gradient pulse on a placeholder row. Renders four
+// of these while the first list query is in flight so the page doesn't
+// look broken.
+function SkeletonRow() {
+  return (
+    <div style={p.skelRow}>
+      <div style={{ ...p.skelLine, width: 70, opacity: 0.6 }} />
+      <div style={{ ...p.skelLine, width: '70%' }} />
+      <div style={p.skelFoot}>
+        <div style={{ ...p.skelChip, width: 50 }} />
+        <div style={{ ...p.skelChip, width: 70 }} />
+        <div style={{ ...p.skelChip, width: 40 }} />
+      </div>
+    </div>
+  );
+}
+
+// Zero-state when there are no runs at all (not a filter mismatch).
+// Prettier than the old "No runs match this filter." string.
+function EmptyZero() {
+  return (
+    <div style={p.zero}>
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#4de6f060', marginBottom: 14 }}>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M8 12l2.5 2.5L16 9" />
+      </svg>
+      <div style={p.zeroTitle}>No swarm runs yet</div>
+      <div style={p.zeroBody}>
+        From any claude pane, call <code style={p.code}>flowade_swarm_start</code> with a task and worker count.
+        Runs land here automatically — transcripts and channel events archived per run.
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Master list row
 // ---------------------------------------------------------------------------
 function RunRow({ run, active, onClick }) {
-  const status = STATUS_META[run.status] || STATUS_META['awaiting-confirm'];
-  const startedAt = run.startedAt ? new Date(run.startedAt) : null;
-  const dur = formatDuration(run.durationMs);
+  // Defensive defaults: a corrupt or partially-written meta.json (e.g.
+  // crash mid-write) shouldn't blank an entire row — we still surface
+  // the runId + any salvageable timestamp.
+  const safeRunId = (run && typeof run.runId === 'string' && run.runId) ? run.runId : 'unknown';
+  const safeStatus = (run && typeof run.status === 'string') ? run.status : 'unknown';
+  const status = STATUS_META[safeStatus] || STATUS_META['unknown'];
+  const safeTask = (run && typeof run.task === 'string' && run.task) ? run.task : '(no task captured)';
+  const safeStartedAt = run?.startedAt || run?.updatedAt || (typeof run?.mtime === 'number' ? new Date(run.mtime).toISOString() : null);
+  const dur = formatDuration(run?.durationMs);
+  const workerCount = Number.isFinite(run?.workerCount) ? run.workerCount : null;
+  const transcriptCount = Number.isFinite(run?.transcriptCount) ? run.transcriptCount : 0;
   return (
     <button
       type="button"
@@ -123,18 +319,18 @@ function RunRow({ run, active, onClick }) {
         <span style={{ ...p.statusPill, color: status.color, background: status.bg, borderColor: status.border }}>
           {status.label}
         </span>
-        <span style={p.rowMeta}>{relativeTime(run.startedAt || run.updatedAt)}</span>
+        <span style={p.rowMeta}>{relativeTime(safeStartedAt)}</span>
       </div>
-      <div style={p.rowTitle} title={run.task || run.runId}>
-        {truncate(run.task || '(no task captured)', 80)}
+      <div style={p.rowTitle} title={safeTask}>
+        {truncate(safeTask, 80)}
       </div>
       <div style={p.rowFoot}>
-        <span style={p.chipMuted}>Team {run.teamId || '?'}</span>
-        <span style={p.chipMuted}>{run.workerCount ?? '?'} {run.workerCount === 1 ? 'worker' : 'workers'}</span>
+        <span style={p.chipMuted}>Team {run?.teamId || '?'}</span>
+        <span style={p.chipMuted}>{workerCount ?? '?'} {workerCount === 1 ? 'worker' : 'workers'}</span>
         {dur && <span style={p.chipMuted}>{dur}</span>}
-        {run.transcriptCount > 0 && <span style={p.chipMuted}>{run.transcriptCount} log{run.transcriptCount === 1 ? '' : 's'}</span>}
+        {transcriptCount > 0 && <span style={p.chipMuted}>{transcriptCount} log{transcriptCount === 1 ? '' : 's'}</span>}
       </div>
-      <div style={p.rowId} title={run.runId}>{run.runId.slice(0, 8)}…</div>
+      <div style={p.rowId} title={safeRunId}>{safeRunId.slice(0, 8)}…</div>
     </button>
   );
 }
@@ -143,7 +339,10 @@ function RunRow({ run, active, onClick }) {
 // Detail
 // ---------------------------------------------------------------------------
 function RunDetail({ run }) {
-  const status = STATUS_META[run.status] || STATUS_META['awaiting-confirm'];
+  const safeStatus = (run && typeof run.status === 'string') ? run.status : 'unknown';
+  const status = STATUS_META[safeStatus] || STATUS_META['unknown'];
+  const safeRunId = (run && typeof run.runId === 'string' && run.runId) ? run.runId : 'unknown';
+  const safeTask = (run && typeof run.task === 'string' && run.task) ? run.task : '(no task captured)';
   const [tab, setTab] = useState('summary'); // summary | timeline | transcripts
   return (
     <div style={d.root}>
@@ -153,10 +352,10 @@ function RunDetail({ run }) {
             <span style={{ ...p.statusPill, color: status.color, background: status.bg, borderColor: status.border }}>
               {status.label}
             </span>
-            <code style={d.runId} title={run.runId}>{run.runId}</code>
-            <CopyBtn value={run.runId} />
+            <code style={d.runId} title={safeRunId}>{safeRunId}</code>
+            <CopyBtn value={safeRunId} />
           </div>
-          <h2 style={d.task}>{run.task || '(no task captured)'}</h2>
+          <h2 style={d.task}>{safeTask}</h2>
         </div>
       </header>
 
@@ -185,27 +384,41 @@ function RunDetail({ run }) {
 }
 
 function SummaryView({ run }) {
-  if (run.cancelReason) {
+  const cancelReason = run?.cancelReason || run?.reason || null;
+  const summary = run?.summary || null;
+  const warnings = Array.isArray(run?.summaryWarnings) ? run.summaryWarnings : [];
+  const integrityIssues = Array.isArray(run?.integrityIssues) ? run.integrityIssues : [];
+
+  if (cancelReason) {
     return (
       <div style={d.section}>
         <SectionLabel>Cancel reason</SectionLabel>
-        <pre style={d.pre}>{run.cancelReason}</pre>
-        {run.summary && (
+        <pre style={d.pre}>{cancelReason}</pre>
+        {summary && (
           <>
             <SectionLabel>Summary</SectionLabel>
-            <pre style={d.pre}>{run.summary}</pre>
+            <pre style={d.pre}>{summary}</pre>
           </>
         )}
       </div>
     );
   }
-  if (!run.summary) {
-    return <div style={d.placeholder}>No summary yet. {run.status === 'done' ? 'Orchestrator did not post one.' : 'Run is still in progress.'}</div>;
+  if (!summary) {
+    return <div style={d.placeholder}>No summary yet. {run?.status === 'done' ? 'Orchestrator did not post one.' : 'Run is still in progress.'}</div>;
   }
   return (
     <div style={d.section}>
+      {(warnings.length > 0 || integrityIssues.length > 0) && (
+        <div style={d.warnBox}>
+          <SectionLabel>Warnings</SectionLabel>
+          <ul style={d.warnList}>
+            {warnings.map((w, i) => <li key={`w-${i}`} style={d.warnItem}>{w}</li>)}
+            {integrityIssues.map((w, i) => <li key={`i-${i}`} style={d.warnItem}>{w}</li>)}
+          </ul>
+        </div>
+      )}
       <SectionLabel>Final summary</SectionLabel>
-      <pre style={d.pre}>{run.summary}</pre>
+      <pre style={d.pre}>{summary}</pre>
     </div>
   );
 }
@@ -470,6 +683,109 @@ const p = {
     marginLeft: 4,
     transition: 'all 0.12s',
   },
+  sortSelect: {
+    appearance: 'none', WebkitAppearance: 'none', MozAppearance: 'none',
+    cursor: 'pointer',
+    padding: '5px 28px 5px 12px',
+    borderRadius: 99,
+    fontSize: 11, color: '#94a3b8', fontFamily: FONT_MONO,
+    background: 'rgba(255,255,255,0.02) url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'10\' height=\'10\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'%2394a3b8\' stroke-width=\'2.4\' stroke-linecap=\'round\' stroke-linejoin=\'round\'><polyline points=\'6 9 12 15 18 9\'/></svg>") no-repeat right 10px center',
+    border: '1px solid rgba(255,255,255,0.10)',
+    outline: 'none',
+    marginLeft: 4,
+  },
+
+  searchRow: {
+    display: 'flex', alignItems: 'center', gap: 6,
+    padding: '8px 32px',
+    borderBottom: '1px solid rgba(255,255,255,0.04)',
+    flexShrink: 0,
+    position: 'relative',
+  },
+  searchInput: {
+    flex: 1,
+    background: 'rgba(0,0,0,0.35)',
+    border: '1px solid rgba(255,255,255,0.10)',
+    borderRadius: 8,
+    padding: '6px 12px',
+    color: '#f1f5f9',
+    fontFamily: FONT_MONO, fontSize: 11.5,
+    outline: 'none',
+  },
+  searchClear: {
+    all: 'unset', cursor: 'pointer',
+    width: 22, height: 22, borderRadius: 4,
+    display: 'grid', placeItems: 'center',
+    color: '#94a3b8', fontSize: 14,
+    border: '1px solid rgba(255,255,255,0.08)',
+  },
+
+  errorBox: {
+    margin: 12, padding: '14px 16px',
+    borderRadius: 10,
+    background: 'rgba(255,139,139,0.08)',
+    border: '1px solid rgba(255,139,139,0.32)',
+    color: '#ff8b8b',
+    fontFamily: FONT_MONO, fontSize: 11.5, lineHeight: 1.55,
+  },
+  errorTitle: { fontWeight: 700, marginBottom: 6, color: '#ff8b8b' },
+  errorBody: { color: '#cbd5e1', marginBottom: 10, wordBreak: 'break-word' },
+  errorRetry: {
+    all: 'unset', cursor: 'pointer',
+    padding: '4px 12px', borderRadius: 6,
+    fontFamily: FONT_MONO, fontSize: 11,
+    background: 'rgba(255,139,139,0.18)',
+    border: '1px solid rgba(255,139,139,0.5)',
+    color: '#ff8b8b',
+  },
+
+  zero: {
+    padding: '48px 24px 24px',
+    display: 'flex', flexDirection: 'column', alignItems: 'center',
+    textAlign: 'center', gap: 6,
+    color: '#94a3b8',
+  },
+  zeroTitle: {
+    fontFamily: FONT_DISP, fontWeight: 700,
+    fontSize: 16, color: '#f1f5f9',
+    margin: 0,
+  },
+  zeroBody: {
+    fontSize: 11.5, lineHeight: 1.6, color: '#94a3b8',
+    fontFamily: FONT_MONO,
+    maxWidth: 260,
+  },
+
+  linkBtn: {
+    all: 'unset', cursor: 'pointer',
+    color: '#4de6f0', fontSize: 11,
+    textDecoration: 'underline', textUnderlineOffset: 2,
+    marginTop: 6, display: 'inline-block',
+  },
+
+  // Skeleton loading row — gradient-pulse on the body so the empty list
+  // signals "fetching" without a spinner. Animation lives in index.css
+  // global keyframes (skeletonPulse) — added in the same commit.
+  skelRow: {
+    display: 'flex', flexDirection: 'column', gap: 6,
+    padding: '12px 12px 10px',
+    borderRadius: 10,
+    border: '1px solid transparent',
+  },
+  skelLine: {
+    height: 12,
+    borderRadius: 4,
+    background: 'linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.14), rgba(255,255,255,0.04))',
+    backgroundSize: '200% 100%',
+    animation: 'skeletonPulse 1.2s ease-in-out infinite',
+  },
+  skelFoot: { display: 'flex', gap: 6 },
+  skelChip: {
+    height: 12, borderRadius: 99,
+    background: 'linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.10), rgba(255,255,255,0.04))',
+    backgroundSize: '200% 100%',
+    animation: 'skeletonPulse 1.2s ease-in-out infinite',
+  },
 
   body: {
     flex: 1, minHeight: 0,
@@ -613,6 +929,16 @@ const d = {
     maxHeight: 480, overflowY: 'auto',
   },
   placeholder: { padding: '32px 12px', color: '#4a5168', fontSize: 12, textAlign: 'center' },
+
+  warnBox: {
+    padding: '10px 14px',
+    background: 'rgba(255,209,102,0.06)',
+    border: '1px solid rgba(255,209,102,0.32)',
+    borderRadius: 10,
+    marginBottom: 8,
+  },
+  warnList: { margin: '6px 0 0', paddingLeft: 18 },
+  warnItem: { fontSize: 11.5, color: '#ffd166', lineHeight: 1.5 },
 
   timeline: { listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 10 },
   tEvt: { display: 'grid', gridTemplateColumns: '28px 1fr', gap: 12 },
