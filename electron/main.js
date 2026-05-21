@@ -23,9 +23,12 @@ import { paneRegistry } from './paneRegistry.js';
 import { registerTerminalHandlers } from './swarmTerminalHandlers.js';
 import { registerLeaseBridgeHandlers } from './leaseRegistry.js';
 import { swarmChannel } from './swarmChannel.js';
-import { registerOrchestrationHandlers } from './swarmOrchestration.js';
+import { registerOrchestrationHandlers, listActiveRuns as listActiveSwarmRuns } from './swarmOrchestration.js';
 import { setMemoryStore as setSwarmAuditMemoryStore } from './swarmAudit.js';
 import { listRuns as listSwarmRuns, getRun as getSwarmRun, getTranscript as getSwarmTranscript } from './swarmTranscriptStore.js';
+import { recoverOrphans as recoverSwarmOrphans } from './swarmRecovery.js';
+import { transition as swarmStateTransition, SwarmState } from './swarmStates.js';
+import { writeRunMeta as writeSwarmRunMeta } from './swarmTranscriptStore.js';
 import { getStartCommand as getProviderStartCommand } from './providerRegistry.js';
 
 const execFileAsync = promisify(execFile);
@@ -463,6 +466,9 @@ ipcMain.handle('swarm:getRun', (_, runId) => {
 });
 ipcMain.handle('swarm:getTranscript', (_, { runId, terminalId }) => {
   try { return getSwarmTranscript(runId, terminalId); } catch (err) { console.error('[swarm:getTranscript]', err); return null; }
+});
+ipcMain.handle('swarm:listActiveRuns', () => {
+  try { return listActiveSwarmRuns(); } catch (err) { console.error('[swarm:listActiveRuns]', err); return []; }
 });
 ipcMain.handle('swarm:replayChannel', async (_, { runId, limit }) => {
   if (!runId) return { events: [], latestTokenId: 0 };
@@ -1258,6 +1264,29 @@ app.whenReady().then(() => {
         swarmChannel.registerBridge(swarmBridge);
         registerOrchestrationHandlers(swarmBridge, { ptyManager });
         console.log(`[Swarm] Bridge listening on 127.0.0.1:${r.port}`);
+
+        // Reconcile any non-terminal runs that didn't finish before the
+        // last process exit (Electron crash, force-quit, OS reboot). Runs
+        // with stale `updatedAt` (>1h) get marked CRASHED so the Swarm
+        // Runs UI doesn't show them as "Planning" forever.
+        try {
+          const report = await recoverSwarmOrphans({
+            swarmChannel,
+            transition: async ({ runId, to, reason, extra }) => swarmStateTransition(
+              { runId, to, reason, extra },
+              { writeRunMeta: writeSwarmRunMeta, audit: null, getCurrentState: () => null }
+            ),
+            listRuns: listSwarmRuns,
+          });
+          if (report.recovered > 0) {
+            console.log(`[Swarm] Recovered ${report.recovered} orphan run(s) (scanned ${report.scanned})`);
+          }
+          if (report.errors && report.errors.length) {
+            console.warn('[Swarm] Recovery errors:', report.errors);
+          }
+        } catch (recErr) {
+          console.error('[Swarm] orphan recovery threw:', recErr?.message || recErr);
+        }
       } else {
         console.log('[Swarm] Bridge disabled (swarm.allowAgentSpawn = false)');
       }

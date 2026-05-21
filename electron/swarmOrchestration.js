@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { paneRegistry } from './paneRegistry.js';
 import { leaseRegistry } from './leaseRegistry.js';
 import { swarmChannel } from './swarmChannel.js';
@@ -15,11 +15,80 @@ import {
   recordRunFinish,
 } from './swarmAudit.js';
 import { writeRunMeta, writeTranscript } from './swarmTranscriptStore.js';
+import { SwarmState, TERMINAL_STATES, transition as stateTransition } from './swarmStates.js';
+import { SwarmErrorKind, handle as handleSwarmError } from './swarmErrors.js';
 
 const TEAM_LETTERS = ['A', 'B', 'C', 'D'];
 const MAX_PANES_PER_WORKSPACE = 16;
 
 const runs = new Map();
+
+// Lightweight audit shim. swarmAudit's helpers are use-case-specific
+// (auditSpawn, auditKill, etc.); state transitions + error events need a
+// pass-through. We write them as type='audit' memories through the same
+// store, but bypassing the typed helpers so we don't fork their schemas.
+async function auditPassthrough({ title, payload, tags }) {
+  try {
+    const { _store } = await import('./swarmAudit.js').then(m => ({ _store: null })).catch(() => ({ _store: null }));
+    // swarmAudit.js doesn't export its store directly. We rely on its
+    // internal write path via re-using auditSpawn's shape. For now, just
+    // log — the explicit audit calls in spawn/kill/etc still fire.
+    console.log(`[swarm:audit] ${title}`, payload && payload.event);
+  } catch (_) { /* never block */ }
+}
+
+function buildTransition({ writeRunMeta: writeMeta }) {
+  return async ({ runId, to, reason, extra }) => stateTransition(
+    { runId, to, reason, extra },
+    {
+      writeRunMeta: writeMeta,
+      audit: auditPassthrough,
+      getCurrentState: (id) => runs.get(id)?.status || null,
+    }
+  );
+}
+
+const transition = buildTransition({ writeRunMeta });
+
+async function handleError({ runId, kind, details, retries }) {
+  return handleSwarmError(
+    { runId, kind, details, retries },
+    { swarmChannel, transition, audit: auditPassthrough }
+  );
+}
+
+// Parse the absolute paths from the "Files (N total):" section of the
+// summary and return ones that don't currently exist on disk. Used at
+// finish() time to bump DONE → DONE_WITH_WARNINGS so the UI can flag a
+// summary that lies about the artifacts it claims to have produced.
+function checkSummaryFileIntegrity(summary) {
+  if (typeof summary !== 'string') return [];
+  const missing = [];
+  const lines = summary.split('\n');
+  let inFiles = false;
+  for (const line of lines) {
+    if (/^\s*Files\s*\(/i.test(line)) { inFiles = true; continue; }
+    if (inFiles) {
+      // Section ends at next blank line followed by another header, or
+      // any line starting with a non-bullet "Word:" pattern.
+      if (/^\s*$/.test(line)) continue;
+      if (/^\s*-\s+/.test(line)) {
+        // Grab the first token that looks like an absolute path.
+        const m = line.match(/[-*]\s+([A-Za-z]:[\\/][^\s·]+|\/[^\s·]+)/);
+        if (m && m[1]) {
+          const p = m[1].replace(/[`'"]+$/, '');
+          try {
+            if (!existsSync(p)) missing.push(`missing: ${p}`);
+          } catch (_) { /* skip if existsSync throws on weird paths */ }
+        }
+      } else if (/^[A-Z][A-Za-z ]+:/.test(line)) {
+        // Next header — leave the Files section.
+        inFiles = false;
+      }
+    }
+  }
+  return missing;
+}
 
 // Prompt templates live in mcp-server/prompts/. Read once at module load
 // and reused per swarm spawn — they're system prompts, not per-run.
@@ -244,10 +313,11 @@ async function start(params, { ptyManager }) {
     orchestratorTerminalId,
     workerTerminalIds,
     userTerminalId,
-    status: 'awaiting-confirm',
+    status: SwarmState.AWAITING_CONFIRM,
     startedAt,
     workersDone: new Set(),
     phaseNudged: { plan: false, allDone: false },
+    finishRetries: 0,
   });
 
   // Per-run channel listener that pushes phase-transition nudges into
@@ -256,6 +326,20 @@ async function start(params, { ptyManager }) {
   // turn between phases. Cleaned up on run end (finish/cancel) via the
   // shared `runs.delete`-then-`channelListener?.()` pattern.
   const onRunEvent = (event) => {
+    try {
+      _runEventHandler(event);
+    } catch (err) {
+      console.error('[swarm:onRunEvent]', runId, err?.message || err);
+      // Route to centralized error handler so the run can recover or
+      // surface to the user instead of silently dying mid-orchestration.
+      handleError({
+        runId,
+        kind: SwarmErrorKind.UNRECOVERABLE,
+        details: { reason: 'channel-listener-threw', message: err?.message || String(err) },
+      }).catch(() => {});
+    }
+  };
+  const _runEventHandler = (event) => {
     const r = runs.get(runId);
     if (!r) return;
     const writePty = (text) => {
@@ -333,9 +417,9 @@ async function start(params, { ptyManager }) {
       orchestratorTerminalId,
       workerTerminalIds,
       userTerminalId,
-      status: 'awaiting-confirm',
       startedAt,
     });
+    await transition({ runId, to: SwarmState.AWAITING_CONFIRM, reason: 'run-created' });
   } catch (err) {
     console.error('[swarm] writeRunMeta failed:', err?.message || err);
   }
@@ -364,7 +448,8 @@ async function start(params, { ptyManager }) {
       payload: { confirm: 'yes', notes: 'auto-confirmed on start' },
     });
     const r = runs.get(runId);
-    if (r) r.status = 'planning';
+    if (r) r.status = SwarmState.PLANNING;
+    await transition({ runId, to: SwarmState.PLANNING, reason: 'auto-confirmed' });
   }
 
   return { runId, teamId: chosenTeamId, orchestratorTerminalId, workerTerminalIds, autoConfirmed: !requireConfirm };
@@ -391,7 +476,8 @@ async function confirm(params) {
     return cancel({ runId, reason: notes || 'user cancelled at plan' }, { ptyManager: null });
   }
 
-  run.status = 'planning';
+  run.status = SwarmState.PLANNING;
+  await transition({ runId, to: SwarmState.PLANNING, reason: 'user-confirmed' });
   return { ok: true };
 }
 
@@ -432,11 +518,14 @@ async function cancel(params, { ptyManager }) {
   }
   try {
     writeRunMeta(runId, {
-      status: 'cancelled',
       reason: reason || null,
       durationMs,
-      finishedAt: new Date().toISOString(),
       panes,
+    });
+    await transition({
+      runId, to: SwarmState.CANCELLED,
+      reason: reason || 'cancelled',
+      extra: { durationMs },
     });
   } catch (err) {
     console.error('[swarm] writeRunMeta(cancel) failed:', err?.message || err);
@@ -459,7 +548,7 @@ async function cancel(params, { ptyManager }) {
   const releaseRes = leaseRegistry.releaseAll({ runId }) || {};
   const releasedLeases = releaseRes.released || [];
 
-  run.status = 'cancelled';
+  run.status = SwarmState.CANCELLED;
   await recordRunFinish({
     runId,
     summary: 'cancelled: ' + (reason || ''),
@@ -485,6 +574,13 @@ async function finish(params, { ptyManager }) {
   const durationMs = params && params.durationMs;
   const run = runs.get(runId);
   if (!run) throw new Error('unknown run');
+
+  // File integrity check: parse the summary's "Files (...)" bullets and
+  // verify the absolute paths actually exist. A summary that lists files
+  // we can't find downgrades the run to DONE_WITH_WARNINGS so the UI can
+  // surface the inconsistency.
+  const integrityIssues = checkSummaryFileIntegrity(summary);
+  const summaryWarnings = null;
 
   await recordRunFinish({ runId, summary, durationMs, status: 'done' });
   await swarmChannel.post({
@@ -523,16 +619,18 @@ async function finish(params, { ptyManager }) {
       bytes: transcriptText.length,
     });
   }
+  // Choose terminal state. Either summary-warnings or integrity-issues
+  // demote DONE → DONE_WITH_WARNINGS so the run page UI can flag it
+  // without losing the summary.
+  const hasIssues = (integrityIssues && integrityIssues.length > 0) || (summaryWarnings && summaryWarnings.length > 0);
+  const finalState = hasIssues ? SwarmState.DONE_WITH_WARNINGS : SwarmState.DONE;
+  const extra = { summary, durationMs, panes };
+  if (integrityIssues && integrityIssues.length > 0) extra.integrityIssues = integrityIssues;
+  if (summaryWarnings && summaryWarnings.length > 0) extra.summaryWarnings = summaryWarnings;
   try {
-    writeRunMeta(runId, {
-      status: 'done',
-      summary,
-      durationMs,
-      finishedAt: new Date().toISOString(),
-      panes,
-    });
+    await transition({ runId, to: finalState, reason: 'finish', extra });
   } catch (err) {
-    console.error('[swarm] writeRunMeta(finish) failed:', err?.message || err);
+    console.error('[swarm] transition(finish) failed:', err?.message || err);
   }
 
   // Auto-close: kill ptys + unregister panes. The paneRegistry emits
@@ -573,10 +671,17 @@ async function finish(params, { ptyManager }) {
     }
   }
 
-  run.status = 'done';
+  run.status = finalState;
   try { runs.get(runId)?._channelListener?.(); } catch (_) {}
   runs.delete(runId);
-  return { ok: true, killedTerminalIds, transcriptCount: panes.length };
+  return {
+    ok: true,
+    killedTerminalIds,
+    transcriptCount: panes.length,
+    status: finalState,
+    integrityIssues: integrityIssues || [],
+    summaryWarnings: summaryWarnings || [],
+  };
 }
 
 export function buildHandlers({ ptyManager } = {}) {
@@ -597,3 +702,25 @@ export function registerOrchestrationHandlers(bridge, deps) {
 }
 
 export function _runsForTest() { return runs; }
+
+// Surface in-memory runs to the renderer (via main.js IPC) so user panes
+// can look up which runs they're rooting. Lightweight projection only —
+// internal handles (_channelListener, workersDone Set) stay private.
+export function listActiveRuns() {
+  const out = [];
+  for (const r of runs.values()) {
+    out.push({
+      runId: r.runId,
+      teamId: r.teamId,
+      task: r.task,
+      workerCount: r.workerCount,
+      status: r.status,
+      orchestratorTerminalId: r.orchestratorTerminalId,
+      workerTerminalIds: r.workerTerminalIds,
+      userTerminalId: r.userTerminalId,
+      startedAt: r.startedAt,
+      finishRetries: r.finishRetries || 0,
+    });
+  }
+  return out;
+}
