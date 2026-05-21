@@ -57,6 +57,52 @@ async function handleError({ runId, kind, details, retries }) {
   );
 }
 
+// Phase 7 summary validation. Orchestrators sometimes return summaries
+// that drop required sections (the model invents shorter headers or
+// omits "Verify with:" entirely). We check the markdown for the field
+// markers from orchestrator.md Phase 7 and reject + re-nudge on the
+// first failure; after one retry we accept-with-warnings so a model
+// that genuinely can't match the format doesn't get stuck.
+function validatePhase7Summary(summary) {
+  const missing = [];
+  if (typeof summary !== 'string' || summary.length < 20) {
+    return { ok: false, missing: ['summary-empty-or-too-short'] };
+  }
+  const lower = summary.toLowerCase();
+
+  if (!/(^|\n)\s*[-*]?\s*cwd\s*:/i.test(summary)) missing.push('cwd:');
+
+  if (!/(^|\n)\s*[-*]?\s*repo\s*:/i.test(summary) && !/no git repo/i.test(lower)) {
+    missing.push('repo: or "no git repo"');
+  }
+
+  if (!/(^|\n)\s*[-*]?\s*project\s*:/i.test(summary)) missing.push('project:');
+
+  const hasFilesHeader = /files\s*\(/i.test(summary);
+  if (!hasFilesHeader) missing.push('Files (');
+  const filesBullet = summary
+    .split('\n')
+    .some(line => /^\s*-\s+\S/.test(line)
+      && (/[A-Za-z]:[\\/]/.test(line) || /^\s*-\s+\//.test(line)));
+  if (!filesBullet) missing.push('absolute-path file bullet');
+
+  if (!/verify\s*(with)?\s*:/i.test(summary)) missing.push('Verify with:');
+
+  const workersHeader = /(worker outcomes|workers)\s*:/i.test(summary);
+  if (!workersHeader) {
+    missing.push('Worker outcomes:');
+  } else {
+    const headerIdx = summary.search(/(worker outcomes|workers)\s*:/i);
+    const after = headerIdx >= 0 ? summary.slice(headerIdx) : '';
+    if (!/\n\s*-\s+\S/.test(after)) missing.push('Worker outcomes bullet');
+  }
+
+  if (!/tests\s*:/i.test(summary)) missing.push('Tests:');
+  if (!/follow[\s-]?ups\s*:/i.test(summary)) missing.push('Follow-ups:');
+
+  return missing.length === 0 ? { ok: true, missing: [] } : { ok: false, missing };
+}
+
 // Parse the absolute paths from the "Files (N total):" section of the
 // summary and return ones that don't currently exist on disk. Used at
 // finish() time to bump DONE → DONE_WITH_WARNINGS so the UI can flag a
@@ -575,12 +621,50 @@ async function finish(params, { ptyManager }) {
   const run = runs.get(runId);
   if (!run) throw new Error('unknown run');
 
+  // Phase 7 server-side validation. Reject + re-nudge on first failure;
+  // accept-with-warnings after one retry so we don't loop forever on a
+  // model that genuinely can't match the format. Routed through
+  // swarmErrors.handle so the channel post + audit are centralized.
+  const v = validatePhase7Summary(summary);
+  const retries = run.finishRetries || 0;
+  let summaryWarnings = null;
+  if (!v.ok) {
+    if (retries < 1) {
+      run.finishRetries = retries + 1;
+      await handleError({
+        runId,
+        kind: SwarmErrorKind.SUMMARY_INVALID,
+        details: { reason: 'phase7-missing-fields', missing: v.missing, retries: run.finishRetries },
+        retries: run.finishRetries,
+      });
+      try {
+        await swarmChannel.post({
+          runId,
+          workerId: 'orchestrator',
+          kind: 'review-fail',
+          payload: { notes: `summary missing required fields: ${v.missing.join(', ')}` },
+        });
+      } catch (_) { /* swallow */ }
+      if (ptyManager && typeof ptyManager.write === 'function') {
+        try {
+          ptyManager.write(
+            run.orchestratorTerminalId,
+            `\n\n[orchestration] Summary rejected — missing: ${v.missing.join(', ')}. ` +
+            `Rewrite the summary to match orchestrator.md Phase 7 exactly, then call flowade_swarm_finish again.`
+          );
+          setTimeout(() => { try { ptyManager.write(run.orchestratorTerminalId, '\r'); } catch (_) {} }, 300);
+        } catch (_) { /* pty may be gone */ }
+      }
+      return { ok: false, missing: v.missing, retries: run.finishRetries };
+    }
+    summaryWarnings = [`summary missing fields after 1 retry: ${v.missing.join(', ')}`];
+  }
+
   // File integrity check: parse the summary's "Files (...)" bullets and
   // verify the absolute paths actually exist. A summary that lists files
   // we can't find downgrades the run to DONE_WITH_WARNINGS so the UI can
   // surface the inconsistency.
   const integrityIssues = checkSummaryFileIntegrity(summary);
-  const summaryWarnings = null;
 
   await recordRunFinish({ runId, summary, durationMs, status: 'done' });
   await swarmChannel.post({

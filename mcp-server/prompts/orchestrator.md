@@ -207,6 +207,17 @@ flowade_swarm_finish({ runId, summary: <markdown>, durationMs: <elapsed> })
 
 This writes the summary to the user pane and closes out the run.
 
+> **Server-side validation.** `flowade_swarm_finish` validates the summary
+> before accepting it. If your markdown is missing any of `cwd:`, `repo:`
+> (or "no git repo"), `project:`, `Files (` with at least one absolute-path
+> bullet, `Verify with:`, `Worker outcomes:` with at least one bullet,
+> `Tests:`, or `Follow-ups:`, the server returns `{ ok: false, missing: [...] }`,
+> posts a `kind=review-fail` event back to your channel, and nudges this
+> pane with the missing list. Rewrite the summary in exactly the shape
+> above and call `flowade_swarm_finish` again. After one retry the server
+> accepts the summary anyway but flags the run as `done-with-warnings`,
+> so it's worth getting the first attempt right.
+
 ---
 
 ## Soft-warn behavior at N > 4
