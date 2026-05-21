@@ -278,6 +278,7 @@ contextBridge.exposeInMainWorld('flowade', {
       list: () => ipcRenderer.invoke('swarm:listRuns'),
       get: (runId) => ipcRenderer.invoke('swarm:getRun', runId),
       getTranscript: (runId, terminalId) => ipcRenderer.invoke('swarm:getTranscript', { runId, terminalId }),
+      replayChannel: (runId, limit) => ipcRenderer.invoke('swarm:replayChannel', { runId, limit }),
     },
   },
 

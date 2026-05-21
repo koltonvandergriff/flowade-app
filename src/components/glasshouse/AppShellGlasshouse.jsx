@@ -33,6 +33,7 @@ import AIChatGlasshouse from './AIChatGlasshouse';
 import TerminalsGlasshouse from './TerminalsGlasshouse';
 import TasksGlasshouse from './TasksGlasshouse';
 import MemoryGlasshouse from './MemoryGlasshouse';
+import SwarmRunsGlasshouse from './SwarmRunsGlasshouse';
 
 const FONT_DISP = 'var(--gh-font-display, "Outfit", sans-serif)';
 const FONT_TECH = 'var(--gh-font-techno, "Chakra Petch", sans-serif)';
@@ -44,6 +45,7 @@ const PAGE_LABELS = {
   chat: 'AI Chat',
   tasks: 'Tasks',
   memory: 'Memory',
+  'swarm-runs': 'Swarm Runs',
   settings: 'Settings',
   pricing: 'Pricing',
 };
@@ -107,6 +109,7 @@ export default function AppShellGlasshouse({ onLogout }) {
     { id: 'go-terminals', label: 'Go: Terminals', category: 'Navigation', onAction: () => setPage('terminals') },
     { id: 'go-tasks',     label: 'Go: Tasks',     category: 'Navigation', onAction: () => setPage('tasks') },
     { id: 'go-memory',    label: 'Go: Memory',    category: 'Navigation', onAction: () => setPage('memory') },
+    { id: 'go-swarm-runs',label: 'Go: Swarm Runs',category: 'Navigation', onAction: () => setPage('swarm-runs') },
     { id: 'open-settings', label: 'Open Settings', category: 'Panels', onAction: () => setSettingsOpen(true) },
     { id: 'open-billing',  label: 'Open Pricing',  category: 'Panels', onAction: () => setSubscriptionOpen(true) },
     { id: 'open-help',     label: 'Help',          category: 'Panels', onAction: () => setHelpOpen(true) },
@@ -140,6 +143,7 @@ export default function AppShellGlasshouse({ onLogout }) {
             {page === 'chat' && <AIChatGlasshouse />}
             {page === 'tasks' && <TasksGlasshouse onClose={() => setPage('overview')} />}
             {page === 'memory' && <MemoryGlasshouse onClose={() => setPage('overview')} />}
+            {page === 'swarm-runs' && <SwarmRunsGlasshouse />}
             {page === 'settings' && <SettingsGlasshouse onLogout={onLogout} />}
             {page === 'pricing'  && <PricingGlasshouse />}
           </ErrorBoundary>

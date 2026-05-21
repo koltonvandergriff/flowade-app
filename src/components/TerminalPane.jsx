@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css';
 import { FONTS, PROVIDERS } from '../lib/constants';
 import { useTheme } from '../hooks/useTheme';
 import { isGlasshouseEnabled } from '../lib/glasshouseTheme';
+import { getRoleChip } from '../lib/swarmTheme';
 
 // Platform sniff for visual chrome that should match the host OS (e.g.,
 // macOS-style traffic-light dots). Falls back to navigator.platform when
@@ -22,6 +23,37 @@ function isMacPlatform() {
 // renders empty when the dev-server detector returns something exotic.
 function shortHostLabel(url) {
   try { return new URL(url).host; } catch { return url; }
+}
+
+// Inline role chip — renders inside the pane header (NOT absolutely
+// positioned), so it can't collide with the title, controls, or status
+// badges. Returns null when no identity exists (web build, drag preview).
+function RoleChip({ identity }) {
+  if (!identity) return null;
+  const chip = getRoleChip(identity);
+  if (!chip) return null;
+  return (
+    <span
+      title={identity.rootLabel ? `from ${identity.rootLabel}` : chip.label}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '2px 7px 2px 6px',
+        fontSize: 9.5, fontWeight: 700, letterSpacing: 0.5,
+        color: chip.color,
+        background: chip.background,
+        border: `1px solid ${chip.border}`,
+        borderRadius: 999,
+        textTransform: 'uppercase',
+        flexShrink: 0,
+        userSelect: 'none',
+        lineHeight: 1.2,
+        fontFamily: FONTS.mono,
+      }}
+    >
+      <span aria-hidden style={{ fontSize: 10, lineHeight: 1 }}>{chip.glyph}</span>
+      <span>{chip.label}</span>
+    </span>
+  );
 }
 import { ToastContext } from '../contexts/ToastContext';
 import { SettingsContext } from '../contexts/SettingsContext';
@@ -384,6 +416,7 @@ export default function TerminalPane({
   isDangerous, onToggleDanger,
   isDragging, isDropTarget,
   onDragStart, onDragEnd, onDragOver, onDrop,
+  swarmIdentity = null,
 }) {
   const { colors, terminalTheme } = useTheme();
   const termRef = useRef(null);
@@ -1027,6 +1060,8 @@ export default function TerminalPane({
             animation: isDangerous || status === 'connecting' ? 'pulse 1.5s infinite' : 'none', flexShrink: 0,
           }} />
         )}
+
+        <RoleChip identity={swarmIdentity} />
 
         {isRenaming ? (
           <input

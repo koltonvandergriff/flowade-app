@@ -380,64 +380,10 @@ export default function TerminalGrid({ dangerFlags, onToggleDanger }) {
       onMouseEnter={() => setHoveredId(t.id)}
       onMouseLeave={() => setHoveredId((curr) => (curr === t.id ? null : curr))}
     >
-      {isSwarmPane ? (
-        // Role badge anchored bottom-LEFT so it never collides with the
-        // pane's top-right control cluster (mic / hamburger / close /
-        // status). Pairs symmetrically with the "↩ from <user>" footer
-        // badge in the bottom-right corner.
-        <div style={{ position: 'absolute', bottom: 8, left: 10, zIndex: 5, pointerEvents: 'none' }}>
-          <PaneBadge ownerType={t.ownerType} teamId={t.teamId} workerIndex={t.workerIndex} />
-        </div>
-      ) : null}
-      {isUserPane ? (
-        // USER chip sits top-left so it never collides with the pane's
-        // built-in title bar status badges (DONE / BUSY) in the top-right.
-        // Slightly raised contrast when this user pane is acting as the
-        // root of an active swarm so the human can see at-a-glance which
-        // tab the agents will report back to.
-        <div style={{
-          position: 'absolute', top: 6, left: 10, zIndex: 5,
-          pointerEvents: 'none',
-          display: 'inline-flex', alignItems: 'center', gap: 5,
-          padding: '3px 8px 3px 7px',
-          fontFamily: fc,
-          fontSize: 10, fontWeight: 700, letterSpacing: 0.6,
-          color: userHue.accent,
-          background: isUserActiveRoot ? userHue.soft : 'rgba(244,210,138,0.06)',
-          border: `1px solid ${isUserActiveRoot ? userHue.border : 'rgba(244,210,138,0.30)'}`,
-          borderRadius: 999,
-          textTransform: 'uppercase',
-          userSelect: 'none',
-          backdropFilter: 'blur(6px)',
-        }}>
-          <span aria-hidden style={{ fontSize: 11, lineHeight: 1 }}>👤</span>
-          <span>User{isUserActiveRoot ? ' · root' : ''}</span>
-        </div>
-      ) : null}
-      {isSwarmPane && rootLabel ? (
-        // Footer link badge: "← from <user-pane-session>". Sits in the
-        // bottom-right corner with team-tinted chrome. Pointer-events
-        // disabled so xterm selection still works through it.
-        <div style={{
-          position: 'absolute', bottom: 8, right: 10, zIndex: 5,
-          pointerEvents: 'none',
-          display: 'inline-flex', alignItems: 'center', gap: 5,
-          padding: '3px 8px 3px 7px',
-          fontFamily: fc,
-          fontSize: 10, fontWeight: 600, letterSpacing: 0.4,
-          color: theme?.accent || '#9adcff',
-          background: theme?.soft || 'rgba(94,197,255,0.12)',
-          border: `1px solid ${theme?.border || 'rgba(94,197,255,0.45)'}`,
-          borderRadius: 6,
-          textTransform: 'uppercase',
-          userSelect: 'none',
-          backdropFilter: 'blur(6px)',
-        }}>
-          <span aria-hidden style={{ opacity: 0.85 }}>↩</span>
-          <span style={{ opacity: 0.6, fontWeight: 500 }}>from</span>
-          <span>{rootLabel}</span>
-        </div>
-      ) : null}
+      {/* Role badges live inside the pane header (passed via the
+          swarmIdentity prop on TerminalPane) so they're part of the
+          chrome instead of floating over it. The pane's outer ring
+          color still encodes team membership at a glance. */}
       {t.pending ? (
         <div style={{
           flex: 1, display: 'flex', flexDirection: 'column',
@@ -479,6 +425,13 @@ export default function TerminalGrid({ dangerFlags, onToggleDanger }) {
           onDragEnd={() => { setDragId(null); setDropTarget(null); }}
           onDragOver={() => setDropTarget(t.id)}
           onDrop={() => handleDrop(t.id)}
+          swarmIdentity={{
+            ownerType: t.ownerType || 'user',
+            teamId: t.teamId,
+            workerIndex: t.workerIndex,
+            isUserActiveRoot,
+            rootLabel: isSwarmPane ? rootLabel : null,
+          }}
         />
       )}
     </div>

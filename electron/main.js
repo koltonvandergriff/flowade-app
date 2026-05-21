@@ -464,6 +464,15 @@ ipcMain.handle('swarm:getRun', (_, runId) => {
 ipcMain.handle('swarm:getTranscript', (_, { runId, terminalId }) => {
   try { return getSwarmTranscript(runId, terminalId); } catch (err) { console.error('[swarm:getTranscript]', err); return null; }
 });
+ipcMain.handle('swarm:replayChannel', async (_, { runId, limit }) => {
+  if (!runId) return { events: [], latestTokenId: 0 };
+  try {
+    return await swarmChannel.read({ runId, sinceTokenId: 0, limit: limit || 1000 });
+  } catch (err) {
+    console.error('[swarm:replayChannel]', err?.message || err);
+    return { events: [], latestTokenId: 0, error: err?.message || String(err) };
+  }
+});
 
 // --- Notification IPC ---
 

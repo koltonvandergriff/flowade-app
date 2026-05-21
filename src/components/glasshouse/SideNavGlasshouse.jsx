@@ -23,6 +23,7 @@ function Icon({ name }) {
     case 'chevron': return <svg {...props}><polyline points="6 9 12 15 18 9" /></svg>;
     case 'search': return <svg {...props}><circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>;
     case 'bell': return <svg {...props}><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 01-3.46 0" /></svg>;
+    case 'swarm-runs': return <svg {...props}><circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="14" r="2" /><circle cx="6" cy="20" r="2" /><circle cx="18" cy="20" r="2" /><path d="M7.4 7.4l3.5 5.2M16.6 7.4l-3.5 5.2M10.6 15.4l-3 3.4M13.4 15.4l3 3.4" /></svg>;
     default: return null;
   }
 }
@@ -44,6 +45,12 @@ const SECTIONS = [
     label: 'Knowledge',
     items: [
       { id: 'memory', label: 'Memory' },
+    ],
+  },
+  {
+    label: 'Activity',
+    items: [
+      { id: 'swarm-runs', label: 'Swarm Runs' },
     ],
   },
 ];

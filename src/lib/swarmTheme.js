@@ -89,4 +89,51 @@ export function composePaneLabel({ workspace, provider, sessionName, teamId, own
   return parts.join(':');
 }
 
+// Inline role chip rendered INSIDE the pane header (next to the
+// session label). Returns { glyph, label, color, background, border }
+// or null for vanilla user panes that aren't the root of an active
+// swarm. The caller spreads these onto a small chip element so the
+// chip is part of the chrome, not an absolute overlay.
+export function getRoleChip({ ownerType, teamId, workerIndex, isUserActiveRoot }) {
+  if (!ownerType || ownerType === 'user') {
+    if (!isUserActiveRoot) {
+      // Plain user pane, no swarm context — still mark it as "user" so
+      // a glance can confirm "this is the human seat".
+      return {
+        glyph: OWNER_GLYPHS.user,
+        label: 'You',
+        color: USER_HUE.accent,
+        background: 'rgba(244,210,138,0.06)',
+        border: 'rgba(244,210,138,0.30)',
+      };
+    }
+    return {
+      glyph: OWNER_GLYPHS.user,
+      label: 'You · root',
+      color: USER_HUE.accent,
+      background: USER_HUE.soft,
+      border: USER_HUE.border,
+    };
+  }
+  const theme = getTeamTheme(teamId) || TEAM_HUES.A;
+  if (ownerType === 'orchestrator') {
+    return {
+      glyph: OWNER_GLYPHS.orchestrator,
+      label: `Orch · ${teamId || 'A'}`,
+      color: theme.accent,
+      background: theme.soft,
+      border: theme.border,
+    };
+  }
+  // ownerType === 'agent' (worker)
+  const wn = typeof workerIndex === 'number' ? `W${workerIndex}` : 'W';
+  return {
+    glyph: OWNER_GLYPHS.agent,
+    label: `${wn} · ${teamId || 'A'}`,
+    color: theme.accent,
+    background: theme.soft,
+    border: theme.border,
+  };
+}
+
 export { TEAM_HUES, OWNER_GLYPHS, OWNER_LABELS };
