@@ -470,6 +470,18 @@ ipcMain.handle('swarm:getTranscript', (_, { runId, terminalId }) => {
 ipcMain.handle('swarm:listActiveRuns', () => {
   try { return listActiveSwarmRuns(); } catch (err) { console.error('[swarm:listActiveRuns]', err); return []; }
 });
+// User-initiated channel post. The MCP bridge has a similar entry point
+// for agents — this version is gated for the renderer so a user pane
+// can inject a note ("Inject note to swarm" action) mid-run without
+// having to spawn an MCP session.
+ipcMain.handle('swarm:channel:post', async (_, { runId, workerId, kind, payload }) => {
+  try {
+    return await swarmChannel.post({ runId, workerId, kind, payload });
+  } catch (err) {
+    console.error('[swarm:channel:post]', err?.message || err);
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
 ipcMain.handle('swarm:replayChannel', async (_, { runId, limit }) => {
   if (!runId) return { events: [], latestTokenId: 0 };
   try {

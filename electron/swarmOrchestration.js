@@ -412,6 +412,19 @@ async function start(params, { ptyManager }) {
       );
     }
 
+    // User-injected note (from the "Inject note to swarm" pane action).
+    // Surface it to the orchestrator pty mid-WORKING so the model can
+    // decide whether to act on it; we don't silently apply it ourselves.
+    if (event.kind === 'progress' && event.workerId === 'user' && event.payload && event.payload.source === 'user-inject') {
+      const note = String(event.payload.note || '').slice(0, 800);
+      if (note) {
+        writePty(
+          `\n\n[orchestration] User injected note: "${note.replace(/"/g, '\\"')}". ` +
+          `Acknowledge in your next channel post and decide if action is needed.`
+        );
+      }
+    }
+
     // Worker reported done — track it. When the last worker reports
     // done, nudge the orchestrator to review + merge + finish.
     if (event.kind === 'done' && event.workerId && event.workerId !== 'orchestrator' && event.workerId !== 'user' && event.workerId !== 'system') {

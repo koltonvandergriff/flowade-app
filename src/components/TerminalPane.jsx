@@ -443,9 +443,30 @@ export default function TerminalPane({
   // misclick doesn't leak across pane remounts.
   const [forceInput, setForceInput] = useState(false);
   const isAgentOwned = swarmIdentity?.ownerType === 'orchestrator' || swarmIdentity?.ownerType === 'agent';
+  const isUserActiveRoot = !!swarmIdentity?.isUserActiveRoot;
   const inputLocked = isAgentOwned && !forceInput;
+  const [injectOpen, setInjectOpen] = useState(false);
+  const [injectActiveRunId, setInjectActiveRunId] = useState(null);
   const inputLockedReadRef = useRef(inputLocked);
   useEffect(() => { inputLockedReadRef.current = inputLocked; }, [inputLocked]);
+
+  // Resolve the active runId for this user pane (when it's the root of
+  // a live swarm). Drives the "Inject note to swarm" action. Reloads
+  // whenever the active-root status flips so a pane that just became a
+  // root picks up its runId without a refresh.
+  useEffect(() => {
+    if (!isUserActiveRoot) { setInjectActiveRunId(null); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const active = await window.flowade?.swarm?.runs?.listActive?.();
+        if (!alive) return;
+        const match = Array.isArray(active) ? active.find(r => r.userTerminalId === id) : null;
+        setInjectActiveRunId(match?.runId || null);
+      } catch (_) { /* no-op */ }
+    })();
+    return () => { alive = false; };
+  }, [isUserActiveRoot, id]);
 
   // Propagate the lock to xterm at runtime so toggling Force input
   // without remounting the pane actually re-enables stdin + the cursor.
@@ -1287,6 +1308,22 @@ export default function TerminalPane({
                 Change folder
               </button>
 
+              {isUserActiveRoot && injectActiveRunId && (
+                <button onClick={() => { setInjectOpen(true); setMoreMenuOpen(false); }} style={{
+                  all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
+                  width: '100%', padding: '6px 10px', borderRadius: 4, fontSize: 11, fontFamily: fb,
+                  color: colors.accent.cyan, transition: 'background .1s', boxSizing: 'border-box',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = colors.bg.overlay; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                title="Post a progress note to the active swarm channel. The orchestrator gets a nudge to acknowledge.">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z" />
+                  </svg>
+                  Inject note to swarm
+                </button>
+              )}
+
               {isAgentOwned && (
                 <button onClick={() => { setForceInput((f) => !f); setMoreMenuOpen(false); }} style={{
                   all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
@@ -1711,6 +1748,143 @@ export default function TerminalPane({
           </div>
         </>
       )}
+
+      {injectOpen && injectActiveRunId && (
+        <InjectNoteModal
+          runId={injectActiveRunId}
+          onClose={() => setInjectOpen(false)}
+          onSent={() => setInjectOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Modal for "Inject note to swarm". Reuses the dim/blur backdrop +
+// rounded panel pattern from KeybindingsPanel so it matches the rest of
+// the chrome. Mid-phase changes may not apply — the orchestrator is
+// free to ignore — so the warning is part of the body copy.
+function InjectNoteModal({ runId, onClose, onSent }) {
+  const { colors } = useTheme();
+  const [note, setNote] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState(null);
+  const taRef = useRef(null);
+  const shortId = runId ? runId.slice(0, 8) : '????????';
+
+  useEffect(() => {
+    taRef.current?.focus();
+    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const send = async () => {
+    const trimmed = note.trim();
+    if (!trimmed || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      const res = await window.flowade?.swarm?.channel?.post?.({
+        runId, workerId: 'user', kind: 'progress',
+        payload: { note: trimmed, source: 'user-inject', at: new Date().toISOString() },
+      });
+      if (res?.error || res?.ok === false) {
+        setError(res?.error || 'Channel post returned an error.');
+        setSending(false);
+        return;
+      }
+      onSent?.();
+    } catch (err) {
+      setError(err?.message || String(err));
+      setSending(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 200,
+        background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: colors.bg.raised, border: `1px solid ${colors.border.subtle}`,
+          borderRadius: 14, width: 520, maxWidth: '92vw',
+          display: 'flex', flexDirection: 'column',
+          boxShadow: '0 24px 80px rgba(0,0,0,0.5)', overflow: 'hidden',
+        }}
+      >
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '16px 22px 14px', borderBottom: `1px solid ${colors.border.subtle}`,
+        }}>
+          <div>
+            <h2 style={{ fontSize: 16, fontWeight: 700, fontFamily: FONTS.display, color: '#fff', margin: 0 }}>
+              Inject note to swarm {shortId}
+            </h2>
+            <p style={{ fontSize: 11, color: colors.text.dim, fontFamily: fc, margin: '4px 0 0' }}>
+              Posts a progress event the orchestrator will see on its next channel read.
+            </p>
+          </div>
+          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', fontSize: 18, color: colors.text.dim }}>&#10005;</button>
+        </div>
+
+        <div style={{ padding: '14px 22px 4px' }}>
+          <div style={{
+            fontSize: 10.5, color: colors.status.warning, fontFamily: fc,
+            background: `${colors.status.warning}10`, border: `1px solid ${colors.status.warning}30`,
+            padding: '6px 10px', borderRadius: 6, marginBottom: 12,
+            lineHeight: 1.45,
+          }}>
+            ⚠ Mid-phase changes may not apply. The orchestrator decides whether to act on this note — treat it as a hint, not a command.
+          </div>
+          <textarea
+            ref={taRef}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. Skip W3's database task — that subsystem is being rewritten in parallel."
+            rows={5}
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              background: 'rgba(0,0,0,0.4)', color: colors.text.primary,
+              border: `1px solid ${colors.border.subtle}`, borderRadius: 8,
+              padding: '10px 12px', fontFamily: fc, fontSize: 12, lineHeight: 1.55,
+              outline: 'none', resize: 'vertical',
+            }}
+          />
+          {error && (
+            <div style={{
+              marginTop: 8, padding: '6px 10px', borderRadius: 6,
+              background: `${colors.status.error}18`, border: `1px solid ${colors.status.error}40`,
+              color: colors.status.error, fontFamily: fc, fontSize: 11,
+            }}>{error}</div>
+          )}
+        </div>
+
+        <div style={{
+          display: 'flex', justifyContent: 'flex-end', gap: 8,
+          padding: '12px 22px 16px',
+        }}>
+          <button onClick={onClose} style={{
+            all: 'unset', cursor: 'pointer', padding: '6px 14px', borderRadius: 6,
+            color: colors.text.secondary, fontFamily: fc, fontSize: 12,
+            border: `1px solid ${colors.border.subtle}`,
+          }}>Cancel</button>
+          <button onClick={send} disabled={!note.trim() || sending} style={{
+            all: 'unset',
+            cursor: (!note.trim() || sending) ? 'not-allowed' : 'pointer',
+            padding: '6px 16px', borderRadius: 6,
+            color: '#fff', fontFamily: fc, fontSize: 12, fontWeight: 600,
+            background: (!note.trim() || sending) ? `${colors.accent.cyan}40` : colors.accent.cyan,
+            opacity: (!note.trim() || sending) ? 0.6 : 1,
+          }}>{sending ? 'Sending…' : 'Send'}</button>
+        </div>
+      </div>
     </div>
   );
 }
