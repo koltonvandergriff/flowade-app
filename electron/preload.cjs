@@ -286,6 +286,11 @@ contextBridge.exposeInMainWorld('flowade', {
     maximize: () => ipcRenderer.send('window:maximize'),
     close: () => ipcRenderer.send('window:close'),
     isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+    onMaximizedChange: (cb) => {
+      const handler = (_, isMax) => cb(isMax);
+      ipcRenderer.on('window:maximizedChanged', handler);
+      return () => ipcRenderer.removeListener('window:maximizedChanged', handler);
+    },
     popout: (terminalId, bounds) => ipcRenderer.invoke('window:popout', { terminalId, bounds }),
     popoutPanel: (panel, bounds) => ipcRenderer.invoke('window:popoutPanel', { panel, bounds }),
     closePopout: (windowId) => ipcRenderer.invoke('window:closePopout', windowId),

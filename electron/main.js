@@ -156,11 +156,6 @@ function createWindow() {
     show: false,
     frame: false,
     titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#1a1b32',
-      symbolColor: '#6a6b85',
-      height: 38,
-    },
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -214,6 +209,8 @@ function createWindow() {
     // Initialize auto-updater after the window is visible
     initAutoUpdater(mainWindow);
   });
+
+  bindWindowStateEvents(mainWindow);
 
   mainWindow.on('close', (e) => {
     // Persist windowed bounds + maximized state. When maximized,
@@ -1078,6 +1075,17 @@ ipcMain.on('window:maximize', () => {
 ipcMain.on('window:close', () => mainWindow?.close());
 ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized() ?? false);
 
+// Forward maximize/unmaximize events so the custom titlebar can swap
+// its restore/maximize icon without having to poll isMaximized.
+function bindWindowStateEvents(win, channel = 'window:maximizedChanged') {
+  if (!win) return;
+  const emit = () => { try { win.webContents.send(channel, win.isMaximized()); } catch { /* window destroyed */ } };
+  win.on('maximize', emit);
+  win.on('unmaximize', emit);
+  win.on('enter-full-screen', emit);
+  win.on('leave-full-screen', emit);
+}
+
 // --- Popout window IPC ---
 
 ipcMain.handle('window:popout', (_, { terminalId, bounds }) => {
@@ -1093,11 +1101,6 @@ ipcMain.handle('window:popout', (_, { terminalId, bounds }) => {
     backgroundColor: '#161729',
     frame: false,
     titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#1a1b32',
-      symbolColor: '#6a6b85',
-      height: 38,
-    },
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,

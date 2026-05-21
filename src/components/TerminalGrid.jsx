@@ -381,7 +381,11 @@ export default function TerminalGrid({ dangerFlags, onToggleDanger }) {
       onMouseLeave={() => setHoveredId((curr) => (curr === t.id ? null : curr))}
     >
       {isSwarmPane ? (
-        <div style={{ position: 'absolute', top: 6, right: 10, zIndex: 5, pointerEvents: 'none' }}>
+        // Role badge anchored bottom-LEFT so it never collides with the
+        // pane's top-right control cluster (mic / hamburger / close /
+        // status). Pairs symmetrically with the "↩ from <user>" footer
+        // badge in the bottom-right corner.
+        <div style={{ position: 'absolute', bottom: 8, left: 10, zIndex: 5, pointerEvents: 'none' }}>
           <PaneBadge ownerType={t.ownerType} teamId={t.teamId} workerIndex={t.workerIndex} />
         </div>
       ) : null}
