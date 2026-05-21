@@ -40,6 +40,7 @@
   --gh-cy-tint-40: rgba(77, 230, 240, 0.40);
   --gh-cy-tint-07: rgba(77, 230, 240, 0.07);
   --gh-cy-tint-12: rgba(77, 230, 240, 0.12);
+  --gh-cy-tint-18: rgba(77, 230, 240, 0.18);
   --gh-silver: #6b7a90;
   --gh-silver-2: #98a4b8;
 
@@ -70,6 +71,13 @@
   --gh-or: #ffb86b;
   --gh-yl: #ffe566;
   --gh-gn: #58e0a8;
+  --gh-gn-glow:    rgba(88, 224, 168, 0.6);
+  --gh-gn-tint-12: rgba(88, 224, 168, 0.12);
+  --gh-gn-tint-32: rgba(88, 224, 168, 0.32);
+  --gh-gn-tint-35: rgba(88, 224, 168, 0.35);
+  --gh-gn-tint-55: rgba(88, 224, 168, 0.55);
+  --gh-mint:       #88f0d8; /* secondary green for provider chips */
+  --gh-ink-divider: #3b4760; /* mid-stop between ink-mute and ink-dim, used as a separator dot */
 
   /* Glass surfaces. --gh-glass is the default panel; --gh-glass-strong
      is the opaque-leaning dropdown / menu bg used on top of everything. */

@@ -14,9 +14,9 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 
-const FONT_DISP = 'var(--gh-font-display, "Outfit", sans-serif)';
-const FONT_TECH = 'var(--gh-font-techno, "Chakra Petch", sans-serif)';
-const FONT_MONO = 'var(--gh-font-mono, "JetBrains Mono", monospace)';
+const FONT_DISP = 'var(--gh-font-display)';
+const FONT_TECH = 'var(--gh-font-techno)';
+const FONT_MONO = 'var(--gh-font-mono)';
 
 const BANNER_TTL_MS = 6000;
 const MAX_BANNERS = 4;
@@ -147,14 +147,14 @@ const s = {
     display: 'flex', alignItems: 'center', gap: 12,
     padding: '10px 14px 10px 12px',
     background: 'rgba(8, 8, 18, 0.78)',
-    border: '1px solid rgba(88,224,168,0.32)',
-    borderRadius: 12,
+    border: '1px solid var(--gh-gn-tint-32)',
+    borderRadius: 'var(--gh-radius-lg)',
     backdropFilter: 'blur(18px) saturate(1.2)',
     boxShadow:
       '0 14px 40px rgba(0,0,0,0.55),' +
-      '0 0 28px rgba(88,224,168,0.12),' +
-      'inset 0 1px 0 rgba(255,255,255,0.04)',
-    color: '#f1f5f9',
+      '0 0 28px var(--gh-gn-tint-12),' +
+      'inset 0 1px 0 var(--gh-hover-04)',
+    color: 'var(--gh-ink)',
     overflow: 'hidden',
     animation: 'flowadeNotifySlide 260ms cubic-bezier(.22,1,.36,1)',
   },
@@ -165,14 +165,14 @@ const s = {
   },
   iconCheck: {
     position: 'relative', zIndex: 1,
-    fontFamily: FONT_DISP, fontSize: 14, fontWeight: 800,
-    color: '#58e0a8',
-    textShadow: '0 0 8px rgba(88,224,168,0.6)',
+    fontFamily: FONT_DISP, fontSize: 'var(--gh-text-14)', fontWeight: 800,
+    color: 'var(--gh-gn)',
+    textShadow: '0 0 8px var(--gh-gn-glow)',
   },
   iconGlow: {
     position: 'absolute', inset: 0,
     borderRadius: '50%',
-    background: 'radial-gradient(circle, rgba(88,224,168,0.35) 0%, transparent 65%)',
+    background: 'radial-gradient(circle, var(--gh-gn-tint-35) 0%, transparent 65%)',
     filter: 'blur(2px)',
   },
   body: {
@@ -183,15 +183,15 @@ const s = {
     display: 'flex', alignItems: 'center', gap: 6,
     fontFamily: FONT_TECH, fontSize: 8.5, fontWeight: 700,
     letterSpacing: '0.28em', textTransform: 'uppercase',
-    color: '#58e0a8',
+    color: 'var(--gh-gn)',
   },
   headTag: {},
-  headSep: { color: '#3b4760', letterSpacing: 0 },
-  headTime: { color: '#94a3b8', letterSpacing: '0.12em', fontWeight: 500 },
+  headSep: { color: 'var(--gh-ink-divider)', letterSpacing: 0 },
+  headTime: { color: 'var(--gh-ink-mute)', letterSpacing: '0.12em', fontWeight: 500 },
   title: {
     display: 'flex', alignItems: 'baseline', gap: 6,
-    fontFamily: FONT_MONO, fontSize: 12,
-    color: '#f1f5f9',
+    fontFamily: FONT_MONO, fontSize: 'var(--gh-text-12)',
+    color: 'var(--gh-ink)',
     overflow: 'hidden',
   },
   titleLabel: {
@@ -200,23 +200,23 @@ const s = {
     flex: '0 1 auto', minWidth: 0,
   },
   titleProvider: {
-    fontSize: 9, fontWeight: 700, letterSpacing: '0.15em',
-    color: '#88f0d8', textTransform: 'uppercase',
+    fontSize: 'var(--gh-text-9)', fontWeight: 700, letterSpacing: '0.15em',
+    color: 'var(--gh-mint)', textTransform: 'uppercase',
     padding: '1px 6px', borderRadius: 99,
-    background: 'rgba(77,230,240,0.08)',
-    border: '1px solid rgba(77,230,240,0.18)',
+    background: 'var(--gh-cy-tint-08)',
+    border: '1px solid var(--gh-cy-tint-18)',
   },
   dismiss: {
     flexShrink: 0,
-    width: 18, height: 18, borderRadius: 4,
+    width: 18, height: 18, borderRadius: 'var(--gh-radius-sm)',
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: 9, color: '#6b7a90',
+    fontSize: 'var(--gh-text-9)', color: 'var(--gh-silver)',
     fontFamily: FONT_MONO,
   },
   ttlBar: {
     position: 'absolute', bottom: 0, left: 0, height: 2,
     width: '100%',
-    background: 'linear-gradient(90deg, rgba(88,224,168,0.55), rgba(77,230,240,0.4))',
+    background: 'linear-gradient(90deg, var(--gh-gn-tint-55), rgba(77,230,240,0.4))',
     transformOrigin: 'left center',
     animation: `flowadeNotifyTtl ${BANNER_TTL_MS}ms linear forwards`,
   },
