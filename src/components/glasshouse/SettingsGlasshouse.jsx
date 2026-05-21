@@ -158,6 +158,40 @@ function MemorySection() {
   const [embed, setEmbed] = useState(() => readBool('flowade.mem.autoEmbed', true));
   const [sync, setSync] = useState(() => readBool('flowade.mem.syncMobile', true));
 
+  // Swarm transcript retention — controls the on-disk archive under
+  // {userData}/flowade-data/swarm-transcripts/. Default ON, 30 days.
+  const [purgeEnabled, setPurgeEnabled] = useState(() => readBool('flowade.swarm.purgeEnabled', true));
+  const [retentionDays, setRetentionDays] = useState(() => {
+    try {
+      const raw = localStorage.getItem('flowade.swarm.retentionDays');
+      const n = raw ? parseInt(raw, 10) : 30;
+      return Number.isFinite(n) ? Math.max(1, Math.min(365, n)) : 30;
+    } catch { return 30; }
+  });
+  const [purgeBusy, setPurgeBusy] = useState(false);
+  const [purgeResult, setPurgeResult] = useState(null);
+
+  const updateRetentionDays = (raw) => {
+    const n = parseInt(raw, 10);
+    const clamped = Number.isFinite(n) ? Math.max(1, Math.min(365, n)) : 30;
+    setRetentionDays(clamped);
+    try { localStorage.setItem('flowade.swarm.retentionDays', String(clamped)); } catch {}
+  };
+
+  const purgeNow = async () => {
+    if (purgeBusy) return;
+    setPurgeBusy(true);
+    setPurgeResult(null);
+    try {
+      const res = await window.flowade?.swarm?.purgeNow?.({ retentionDays, purgeEnabled });
+      setPurgeResult(res || { purged: 0 });
+    } catch (err) {
+      setPurgeResult({ purged: 0, errors: [{ error: err?.message || String(err) }] });
+    } finally {
+      setPurgeBusy(false);
+    }
+  };
+
   return (
     <>
       <h2 style={s.cardH2}>Memory</h2>
@@ -165,6 +199,49 @@ function MemorySection() {
       <Toggle label="Auto-categorize on create" desc="Slot every new memory into a leaf via Haiku 4.5." on={auto} onChange={(v) => { setAuto(v); writeBool('flowade.mem.autoCategorize', v); }} />
       <Toggle label="Auto-embed on create" desc="Compute vector for semantic search." on={embed} onChange={(v) => { setEmbed(v); writeBool('flowade.mem.autoEmbed', v); }} />
       <Toggle label="Sync to mobile" desc="Real-time cross-device updates." on={sync} onChange={(v) => { setSync(v); writeBool('flowade.mem.syncMobile', v); }} />
+
+      <Toggle
+        label="Auto-purge old swarm transcripts"
+        desc="Run a background sweep on app start that deletes finished swarm runs older than the retention window."
+        on={purgeEnabled}
+        onChange={(v) => { setPurgeEnabled(v); writeBool('flowade.swarm.purgeEnabled', v); }}
+      />
+      <Row label="Retention days">
+        <input
+          type="number"
+          min={1}
+          max={365}
+          value={retentionDays}
+          disabled={!purgeEnabled}
+          onChange={(e) => updateRetentionDays(e.target.value)}
+          style={{ ...s.textInput, width: 120, opacity: purgeEnabled ? 1 : 0.5 }}
+        />
+      </Row>
+      <Row label="Purge now">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button
+            onClick={purgeNow}
+            disabled={purgeBusy}
+            style={{
+              all: 'unset', cursor: purgeBusy ? 'wait' : 'pointer',
+              padding: '6px 14px', borderRadius: 6,
+              background: 'rgba(77,230,240,0.10)',
+              border: '1px solid rgba(77,230,240,0.32)',
+              color: '#4de6f0',
+              fontFamily: FONT_MONO, fontSize: 11, fontWeight: 600,
+              opacity: purgeBusy ? 0.6 : 1,
+            }}
+          >
+            {purgeBusy ? 'Purging…' : 'Run purge'}
+          </button>
+          {purgeResult && (
+            <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: FONT_MONO }}>
+              {Number.isFinite(purgeResult.purged) ? `Purged ${purgeResult.purged} of ${purgeResult.scanned ?? '?'}` : 'Purge failed'}
+              {purgeResult.errors && purgeResult.errors.length > 0 && ' · errors logged'}
+            </span>
+          )}
+        </div>
+      </Row>
     </>
   );
 }

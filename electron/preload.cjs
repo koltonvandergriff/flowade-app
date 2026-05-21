@@ -284,6 +284,7 @@ contextBridge.exposeInMainWorld('flowade', {
     channel: {
       post: (params) => ipcRenderer.invoke('swarm:channel:post', params),
     },
+    purgeNow: (params) => ipcRenderer.invoke('swarm:purgeNow', params || {}),
   },
 
   window: {

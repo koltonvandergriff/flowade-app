@@ -25,7 +25,7 @@ import { registerLeaseBridgeHandlers } from './leaseRegistry.js';
 import { swarmChannel } from './swarmChannel.js';
 import { registerOrchestrationHandlers, listActiveRuns as listActiveSwarmRuns } from './swarmOrchestration.js';
 import { setMemoryStore as setSwarmAuditMemoryStore } from './swarmAudit.js';
-import { listRuns as listSwarmRuns, getRun as getSwarmRun, getTranscript as getSwarmTranscript } from './swarmTranscriptStore.js';
+import { listRuns as listSwarmRuns, getRun as getSwarmRun, getTranscript as getSwarmTranscript, purgeOldRuns as purgeSwarmOldRuns } from './swarmTranscriptStore.js';
 import { recoverOrphans as recoverSwarmOrphans } from './swarmRecovery.js';
 import { transition as swarmStateTransition, SwarmState } from './swarmStates.js';
 import { writeRunMeta as writeSwarmRunMeta } from './swarmTranscriptStore.js';
@@ -470,6 +470,28 @@ ipcMain.handle('swarm:getTranscript', (_, { runId, terminalId }) => {
 ipcMain.handle('swarm:listActiveRuns', () => {
   try { return listActiveSwarmRuns(); } catch (err) { console.error('[swarm:listActiveRuns]', err); return []; }
 });
+// Retention is persisted on the renderer side under localStorage (per
+// existing settings pattern). The renderer passes the current value
+// into the purge IPC; main mirrors it into settingsStore so the boot
+// auto-purge has something to read before any renderer window mounts.
+ipcMain.handle('swarm:purgeNow', (_, params) => {
+  try {
+    const retentionDays = (params && Number.isFinite(params.retentionDays))
+      ? params.retentionDays
+      : (settingsStore.get('swarm.retentionDays') || 30);
+    if (params && Number.isFinite(params.retentionDays)) {
+      settingsStore.set('swarm.retentionDays', params.retentionDays);
+    }
+    if (params && typeof params.purgeEnabled === 'boolean') {
+      settingsStore.set('swarm.purgeEnabled', params.purgeEnabled);
+    }
+    return purgeSwarmOldRuns({ retentionDays });
+  } catch (err) {
+    console.error('[swarm:purgeNow]', err?.message || err);
+    return { purged: 0, scanned: 0, errors: [{ error: err?.message || String(err) }] };
+  }
+});
+
 // User-initiated channel post. The MCP bridge has a similar entry point
 // for agents — this version is gated for the renderer so a user pane
 // can inject a note ("Inject note to swarm" action) mid-run without
@@ -1276,6 +1298,27 @@ app.whenReady().then(() => {
         swarmChannel.registerBridge(swarmBridge);
         registerOrchestrationHandlers(swarmBridge, { ptyManager });
         console.log(`[Swarm] Bridge listening on 127.0.0.1:${r.port}`);
+
+        // Auto-purge old transcripts if the user has the toggle on
+        // (default ON). Reads the mirrored value from settingsStore so
+        // the boot path doesn't depend on a renderer window being live
+        // yet — the renderer pushes any change through swarm:purgeNow.
+        try {
+          const purgeEnabled = settingsStore.get('swarm.purgeEnabled');
+          const enabled = purgeEnabled === undefined ? true : !!purgeEnabled;
+          if (enabled) {
+            const days = settingsStore.get('swarm.retentionDays') || 30;
+            const purgeReport = purgeSwarmOldRuns({ retentionDays: days });
+            if (purgeReport.purged > 0) {
+              console.log(`[Swarm] Auto-purged ${purgeReport.purged} run dir(s) older than ${purgeReport.retentionDays} days (scanned ${purgeReport.scanned})`);
+            }
+            if (purgeReport.errors && purgeReport.errors.length) {
+              console.warn('[Swarm] Purge errors:', purgeReport.errors);
+            }
+          }
+        } catch (purgeErr) {
+          console.error('[Swarm] auto-purge threw:', purgeErr?.message || purgeErr);
+        }
 
         // Reconcile any non-terminal runs that didn't finish before the
         // last process exit (Electron crash, force-quit, OS reboot). Runs
