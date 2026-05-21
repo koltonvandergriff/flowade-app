@@ -71,8 +71,8 @@ export default function SideNavGlasshouse({ activePanel, onSelect, user, badges 
                   onClick={() => onSelect?.(item.id)}
                   title={item.label}
                   style={{ ...s.navLink, ...(active ? s.navLinkActive : null) }}
-                  onMouseEnter={(e) => { if (!active) { e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; e.currentTarget.style.color = '#f1f5f9'; } }}
-                  onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#94a3b8'; } }}
+                  onMouseEnter={(e) => { if (!active) { e.currentTarget.style.background = 'var(--gh-hover-04)'; e.currentTarget.style.color = 'var(--gh-ink)'; } }}
+                  onMouseLeave={(e) => { if (!active) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--gh-ink-mute)'; } }}
                 >
                   <span style={s.navIcon}><Icon name={item.id} /></span>
                   <span>{item.label}</span>
@@ -97,9 +97,9 @@ export default function SideNavGlasshouse({ activePanel, onSelect, user, badges 
 
 const s = {
   root: {
-    width: 220, minWidth: 220, height: '100%',
-    background: 'linear-gradient(180deg, rgba(14,14,28,0.85), rgba(8,8,16,0.95))',
-    borderRight: '1px solid rgba(77,230,240,0.06)',
+    width: 'var(--gh-sidenav-width)', minWidth: 'var(--gh-sidenav-width)', height: '100%',
+    background: 'linear-gradient(180deg, var(--gh-sidenav-bg-start), var(--gh-sidenav-bg-end))',
+    borderRight: '1px solid var(--gh-cy-tint-06)',
     backdropFilter: 'blur(14px)',
     display: 'flex', flexDirection: 'column',
     flexShrink: 0,
@@ -107,48 +107,48 @@ const s = {
   brandHead: {
     padding: '20px 18px 16px',
     display: 'flex', alignItems: 'center', gap: 10,
-    borderBottom: '1px solid rgba(255,255,255,0.06)',
+    borderBottom: '1px solid var(--gh-line)',
   },
   logoFa: {
     width: 26, height: 26, objectFit: 'contain',
-    filter: 'drop-shadow(0 0 8px rgba(77,230,240,0.4))',
+    filter: 'drop-shadow(0 0 8px var(--gh-cy-tint-40))',
   },
   brandName: {
-    fontFamily: 'var(--gh-font-techno, "Chakra Petch", sans-serif)',
-    fontWeight: 600, fontSize: 14, letterSpacing: '0.18em',
-    textTransform: 'uppercase', color: '#f1f5f9',
+    fontFamily: 'var(--gh-font-techno)',
+    fontWeight: 600, fontSize: 'var(--gh-text-14)', letterSpacing: '0.18em',
+    textTransform: 'uppercase', color: 'var(--gh-ink)',
   },
   brandTag: {
     marginLeft: 'auto',
-    fontFamily: 'var(--gh-font-mono, "JetBrains Mono", monospace)',
-    fontSize: 9, letterSpacing: '0.22em', fontWeight: 700,
+    fontFamily: 'var(--gh-font-mono)',
+    fontSize: 'var(--gh-text-9)', letterSpacing: '0.22em', fontWeight: 700,
     padding: '3px 8px',
-    border: '1px solid rgba(77,230,240,0.35)',
-    background: 'rgba(77,230,240,0.04)',
-    color: '#4de6f0',
+    border: '1px solid var(--gh-cy-tint-35)',
+    background: 'var(--gh-cy-tint-04)',
+    color: 'var(--gh-cy)',
   },
   list: { flex: 1, padding: '6px 10px', overflowY: 'auto' },
   section: { display: 'flex', flexDirection: 'column', gap: 1, marginBottom: 14 },
   sectionLabel: {
-    fontFamily: 'var(--gh-font-techno, "Chakra Petch", sans-serif)',
-    fontWeight: 600, fontSize: 9,
+    fontFamily: 'var(--gh-font-techno)',
+    fontWeight: 600, fontSize: 'var(--gh-text-9)',
     letterSpacing: '0.32em', textTransform: 'uppercase',
-    color: '#4de6f0', opacity: 0.55,
+    color: 'var(--gh-cy)', opacity: 0.55,
     padding: '14px 14px 6px',
   },
   navLink: {
     all: 'unset', cursor: 'pointer',
     display: 'flex', alignItems: 'center', gap: 10,
-    padding: '8px 12px', borderRadius: 8,
-    fontFamily: 'var(--gh-font-mono, "JetBrains Mono", monospace)',
-    fontSize: 12, color: '#94a3b8',
-    transition: 'all 0.15s',
+    padding: '8px 12px', borderRadius: 'var(--gh-radius-md)',
+    fontFamily: 'var(--gh-font-mono)',
+    fontSize: 'var(--gh-text-12)', color: 'var(--gh-ink-mute)',
+    transition: 'all 0.15s var(--gh-ease)',
   },
   navLinkActive: {
-    background: 'linear-gradient(90deg, rgba(77,230,240,0.14), transparent 80%)',
-    color: '#4de6f0',
-    boxShadow: 'inset 2px 0 0 #4de6f0, 0 0 24px rgba(77,230,240,0.08)',
-    textShadow: '0 0 8px rgba(77,230,240,0.5)',
+    background: 'linear-gradient(90deg, var(--gh-cy-tint-14), transparent 80%)',
+    color: 'var(--gh-cy)',
+    boxShadow: 'inset 2px 0 0 var(--gh-cy), 0 0 24px var(--gh-cy-tint-08)',
+    textShadow: '0 0 8px var(--gh-cy-glow)',
   },
   navIcon: {
     width: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -156,35 +156,35 @@ const s = {
   },
   badge: {
     marginLeft: 'auto',
-    fontFamily: 'var(--gh-font-mono, monospace)',
-    fontSize: 9, fontWeight: 700,
+    fontFamily: 'var(--gh-font-mono)',
+    fontSize: 'var(--gh-text-9)', fontWeight: 700,
     padding: '1px 6px', borderRadius: 99,
-    background: 'rgba(77,230,240,0.15)', color: '#4de6f0',
+    background: 'var(--gh-cy-tint-15)', color: 'var(--gh-cy)',
   },
   footUser: {
     padding: '12px 14px',
-    borderTop: '1px solid rgba(255,255,255,0.06)',
+    borderTop: '1px solid var(--gh-line)',
     display: 'flex', alignItems: 'center', gap: 10,
     flexShrink: 0,
   },
   avatar: {
     width: 28, height: 28, borderRadius: '50%',
-    background: 'linear-gradient(135deg, #4de6f0, #1aa9bc)',
+    background: 'linear-gradient(135deg, var(--gh-cy), var(--gh-cy-deep))',
     display: 'grid', placeItems: 'center',
-    fontFamily: 'var(--gh-font-display, "Outfit", sans-serif)',
-    fontWeight: 700, fontSize: 12, color: '#001014',
+    fontFamily: 'var(--gh-font-display)',
+    fontWeight: 700, fontSize: 'var(--gh-text-12)', color: 'var(--gh-cy-on)',
     flexShrink: 0,
-    boxShadow: '0 0 12px rgba(77,230,240,0.35)',
+    boxShadow: '0 0 12px var(--gh-cy-tint-35)',
   },
   userMeta: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
   userName: {
-    fontFamily: 'var(--gh-font-mono, monospace)',
-    fontSize: 11, color: '#f1f5f9',
+    fontFamily: 'var(--gh-font-mono)',
+    fontSize: 'var(--gh-text-11)', color: 'var(--gh-ink)',
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   userEmail: {
-    fontFamily: 'var(--gh-font-mono, monospace)',
-    fontSize: 9, color: '#4a5168',
+    fontFamily: 'var(--gh-font-mono)',
+    fontSize: 'var(--gh-text-9)', color: 'var(--gh-ink-dim)',
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
 };

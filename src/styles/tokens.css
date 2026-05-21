@@ -28,9 +28,38 @@
 
   --gh-cy: #4de6f0;
   --gh-cy-deep: #1aa9bc;
+  --gh-cy-on: #001014; /* high-contrast ink for placing text/icons on cyan */
   --gh-cy-glow: rgba(77, 230, 240, 0.35);
+  --gh-cy-tint-04: rgba(77, 230, 240, 0.04);
+  --gh-cy-tint-06: rgba(77, 230, 240, 0.06);
+  --gh-cy-tint-08: rgba(77, 230, 240, 0.08);
+  --gh-cy-tint-14: rgba(77, 230, 240, 0.14);
+  --gh-cy-tint-15: rgba(77, 230, 240, 0.15);
+  --gh-cy-tint-24: rgba(77, 230, 240, 0.24);
+  --gh-cy-tint-35: rgba(77, 230, 240, 0.35);
+  --gh-cy-tint-40: rgba(77, 230, 240, 0.40);
   --gh-silver: #6b7a90;
   --gh-silver-2: #98a4b8;
+
+  /* Hover / pressed surfaces — neutral white-on-glass overlays. */
+  --gh-hover-04: rgba(255, 255, 255, 0.04);
+  --gh-hover-08: rgba(255, 255, 255, 0.08);
+  --gh-hover-12: rgba(255, 255, 255, 0.12);
+
+  /* SideNav-specific gradient endpoints. Kept here so a future sidebar
+     restyle doesn't need to track them down in every component. */
+  --gh-sidenav-bg-start: rgba(14, 14, 28, 0.85);
+  --gh-sidenav-bg-end:   rgba(8, 8, 16, 0.95);
+  --gh-sidenav-width:    220px;
+
+  /* Type sizes used by sidebar / nav chrome. Adding the canonical
+     ladder so subsequent components can pull from the same scale. */
+  --gh-text-9:  9px;
+  --gh-text-10: 10px;
+  --gh-text-11: 11px;
+  --gh-text-12: 12px;
+  --gh-text-13: 13px;
+  --gh-text-14: 14px;
 
   /* Status colors — semantic only, never decorative */
   --gh-rd: #ff6b6b;
