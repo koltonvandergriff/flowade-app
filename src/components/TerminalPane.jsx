@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css';
 import { FONTS, PROVIDERS } from '../lib/constants';
 import { useTheme } from '../hooks/useTheme';
 import { isGlasshouseEnabled } from '../lib/glasshouseTheme';
+import { getRoleChip } from '../lib/swarmTheme';
 
 // Platform sniff for visual chrome that should match the host OS (e.g.,
 // macOS-style traffic-light dots). Falls back to navigator.platform when
@@ -22,6 +23,37 @@ function isMacPlatform() {
 // renders empty when the dev-server detector returns something exotic.
 function shortHostLabel(url) {
   try { return new URL(url).host; } catch { return url; }
+}
+
+// Inline role chip — renders inside the pane header (NOT absolutely
+// positioned), so it can't collide with the title, controls, or status
+// badges. Returns null when no identity exists (web build, drag preview).
+function RoleChip({ identity }) {
+  if (!identity) return null;
+  const chip = getRoleChip(identity);
+  if (!chip) return null;
+  return (
+    <span
+      title={identity.rootLabel ? `from ${identity.rootLabel}` : chip.label}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        padding: '2px 7px 2px 6px',
+        fontSize: 9.5, fontWeight: 700, letterSpacing: 0.5,
+        color: chip.color,
+        background: chip.background,
+        border: `1px solid ${chip.border}`,
+        borderRadius: 999,
+        textTransform: 'uppercase',
+        flexShrink: 0,
+        userSelect: 'none',
+        lineHeight: 1.2,
+        fontFamily: FONTS.mono,
+      }}
+    >
+      <span aria-hidden style={{ fontSize: 10, lineHeight: 1 }}>{chip.glyph}</span>
+      <span>{chip.label}</span>
+    </span>
+  );
 }
 import { ToastContext } from '../contexts/ToastContext';
 import { SettingsContext } from '../contexts/SettingsContext';
@@ -384,6 +416,7 @@ export default function TerminalPane({
   isDangerous, onToggleDanger,
   isDragging, isDropTarget,
   onDragStart, onDragEnd, onDragOver, onDrop,
+  swarmIdentity = null,
 }) {
   const { colors, terminalTheme } = useTheme();
   const termRef = useRef(null);
@@ -402,6 +435,49 @@ export default function TerminalPane({
   // upstream and shouldn't appear in the edit field.
   const [renameVal, setRenameVal] = useState(sessionName || label);
   const [inputVal, setInputVal] = useState('');
+  // Agent-owned panes (orchestrator + worker) are read-only by default —
+  // keystrokes in xterm and the bottom input box are blocked so a human
+  // looking at the run doesn't accidentally derail it. The hamburger has
+  // a "Force input (advanced)" toggle that unlocks the pane when the
+  // human knows what they're doing. State lives here, not in props, so a
+  // misclick doesn't leak across pane remounts.
+  const [forceInput, setForceInput] = useState(false);
+  const isAgentOwned = swarmIdentity?.ownerType === 'orchestrator' || swarmIdentity?.ownerType === 'agent';
+  const isUserActiveRoot = !!swarmIdentity?.isUserActiveRoot;
+  const inputLocked = isAgentOwned && !forceInput;
+  const [injectOpen, setInjectOpen] = useState(false);
+  const [injectActiveRunId, setInjectActiveRunId] = useState(null);
+  const inputLockedReadRef = useRef(inputLocked);
+  useEffect(() => { inputLockedReadRef.current = inputLocked; }, [inputLocked]);
+
+  // Resolve the active runId for this user pane (when it's the root of
+  // a live swarm). Drives the "Inject note to swarm" action. Reloads
+  // whenever the active-root status flips so a pane that just became a
+  // root picks up its runId without a refresh.
+  useEffect(() => {
+    if (!isUserActiveRoot) { setInjectActiveRunId(null); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const active = await window.flowade?.swarm?.runs?.listActive?.();
+        if (!alive) return;
+        const match = Array.isArray(active) ? active.find(r => r.userTerminalId === id) : null;
+        setInjectActiveRunId(match?.runId || null);
+      } catch (_) { /* no-op */ }
+    })();
+    return () => { alive = false; };
+  }, [isUserActiveRoot, id]);
+
+  // Propagate the lock to xterm at runtime so toggling Force input
+  // without remounting the pane actually re-enables stdin + the cursor.
+  useEffect(() => {
+    const term = xtermRef.current;
+    if (!term || typeof term.options !== 'object') return;
+    try {
+      term.options.disableStdin = inputLocked;
+      term.options.cursorBlink = !inputLocked;
+    } catch (_) { /* xterm option setter not available on older versions */ }
+  }, [inputLocked]);
   const [promptY, setPromptY] = useState(null);
   const promptTimerRef = useRef(null);
   const inputStartPosRef = useRef({ x: 0, y: 0 });
@@ -567,6 +643,11 @@ export default function TerminalPane({
   });
 
   const handleInputSend = useCallback(async () => {
+    // Belt-and-braces: even if the bottom input box is rendered (e.g. on
+    // a user pane that just got its identity flipped at runtime), drop
+    // sends when the agent pane is locked so a stray keystroke can't
+    // reach the agent's pty.
+    if (inputLockedReadRef.current) return;
     if (isApiProvider) {
       const text = inputVal.trim();
       if (!text && !attachedImages.length) return;
@@ -640,12 +721,16 @@ export default function TerminalPane({
     }
     if (!termRef.current) return;
 
+    // Agent panes boot with stdin disabled + cursor blink off so the
+    // pane reads visually as read-only. The hamburger Force-input toggle
+    // flips both at runtime via the `inputLocked` effect below.
     const term = new Terminal({
       theme: terminalTheme,
       fontFamily: FONTS.mono,
       fontSize,
-      cursorBlink: true,
+      cursorBlink: !inputLocked,
       cursorStyle: 'bar',
+      disableStdin: inputLocked,
       allowProposedApi: true,
     });
 
@@ -866,6 +951,10 @@ export default function TerminalPane({
     })();
 
     term.onData((data) => {
+      // Agent panes are read-only unless the user has flipped the Force
+      // input toggle — drop the keystroke entirely so it never reaches
+      // the pty and the orchestrator's state stays consistent.
+      if (inputLockedReadRef.current) return;
       window.flowade?.terminal.write(id, data);
       inputLockedRef.current = true;
       if (data === '\r' || data === '\n') {
@@ -1026,6 +1115,23 @@ export default function TerminalPane({
             width: 7, height: 7, borderRadius: '50%', background: isDangerous ? colors.status.error : statusColor,
             animation: isDangerous || status === 'connecting' ? 'pulse 1.5s infinite' : 'none', flexShrink: 0,
           }} />
+        )}
+
+        <RoleChip identity={swarmIdentity} />
+
+        {isAgentOwned && forceInput && (
+          <span
+            title="Force input is ON — keystrokes will reach this agent's pty. Disable from the hamburger menu."
+            style={{
+              fontSize: 8, fontWeight: 700,
+              padding: '2px 6px', borderRadius: 99, fontFamily: fc,
+              background: `${colors.status.warning}18`, color: colors.status.warning,
+              letterSpacing: 0.5, border: `1px solid ${colors.status.warning}40`,
+              flexShrink: 0, lineHeight: 1.2,
+            }}
+          >
+            ⚠ FORCE INPUT ON
+          </span>
         )}
 
         {isRenaming ? (
@@ -1201,6 +1307,40 @@ export default function TerminalPane({
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" /></svg>
                 Change folder
               </button>
+
+              {isUserActiveRoot && injectActiveRunId && (
+                <button onClick={() => { setInjectOpen(true); setMoreMenuOpen(false); }} style={{
+                  all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
+                  width: '100%', padding: '6px 10px', borderRadius: 4, fontSize: 11, fontFamily: fb,
+                  color: colors.accent.cyan, transition: 'background .1s', boxSizing: 'border-box',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = colors.bg.overlay; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                title="Post a progress note to the active swarm channel. The orchestrator gets a nudge to acknowledge.">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z" />
+                  </svg>
+                  Inject note to swarm
+                </button>
+              )}
+
+              {isAgentOwned && (
+                <button onClick={() => { setForceInput((f) => !f); setMoreMenuOpen(false); }} style={{
+                  all: 'unset', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
+                  width: '100%', padding: '6px 10px', borderRadius: 4, fontSize: 11, fontFamily: fb,
+                  color: forceInput ? colors.status.warning : colors.text.secondary,
+                  transition: 'background .1s', boxSizing: 'border-box',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = colors.bg.overlay; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                title="Bypass the read-only lock on this agent pane. Use only when you need to manually intervene.">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                    <path d={forceInput ? 'M7 11V7a5 5 0 0110 0' : 'M7 11V7a5 5 0 019.9-1'} />
+                  </svg>
+                  {forceInput ? 'Disable force input' : 'Force input (advanced)'}
+                </button>
+              )}
 
               {!isApiProvider && (
                 <button onClick={() => { setMode((m) => m === 'usage' ? 'tokens' : 'usage'); setMoreMenuOpen(false); }} style={{
@@ -1501,8 +1641,11 @@ export default function TerminalPane({
         </div>
       )}
 
-      {/* Bottom bar — only for API providers (terminal has floating buttons) */}
-      {isApiProvider && (
+      {/* Bottom bar — only for API providers (terminal has floating
+          buttons). Hidden for agent-owned panes so the user can't
+          accidentally inject into the agent's chat thread; the Force
+          input toggle restores it. */}
+      {isApiProvider && !inputLocked && (
         <>
           {attachedImages.length > 0 && (
             <div style={{
@@ -1605,6 +1748,143 @@ export default function TerminalPane({
           </div>
         </>
       )}
+
+      {injectOpen && injectActiveRunId && (
+        <InjectNoteModal
+          runId={injectActiveRunId}
+          onClose={() => setInjectOpen(false)}
+          onSent={() => setInjectOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Modal for "Inject note to swarm". Reuses the dim/blur backdrop +
+// rounded panel pattern from KeybindingsPanel so it matches the rest of
+// the chrome. Mid-phase changes may not apply — the orchestrator is
+// free to ignore — so the warning is part of the body copy.
+function InjectNoteModal({ runId, onClose, onSent }) {
+  const { colors } = useTheme();
+  const [note, setNote] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState(null);
+  const taRef = useRef(null);
+  const shortId = runId ? runId.slice(0, 8) : '????????';
+
+  useEffect(() => {
+    taRef.current?.focus();
+    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const send = async () => {
+    const trimmed = note.trim();
+    if (!trimmed || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      const res = await window.flowade?.swarm?.channel?.post?.({
+        runId, workerId: 'user', kind: 'progress',
+        payload: { note: trimmed, source: 'user-inject', at: new Date().toISOString() },
+      });
+      if (res?.error || res?.ok === false) {
+        setError(res?.error || 'Channel post returned an error.');
+        setSending(false);
+        return;
+      }
+      onSent?.();
+    } catch (err) {
+      setError(err?.message || String(err));
+      setSending(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 200,
+        background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: colors.bg.raised, border: `1px solid ${colors.border.subtle}`,
+          borderRadius: 14, width: 520, maxWidth: '92vw',
+          display: 'flex', flexDirection: 'column',
+          boxShadow: '0 24px 80px rgba(0,0,0,0.5)', overflow: 'hidden',
+        }}
+      >
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '16px 22px 14px', borderBottom: `1px solid ${colors.border.subtle}`,
+        }}>
+          <div>
+            <h2 style={{ fontSize: 16, fontWeight: 700, fontFamily: FONTS.display, color: '#fff', margin: 0 }}>
+              Inject note to swarm {shortId}
+            </h2>
+            <p style={{ fontSize: 11, color: colors.text.dim, fontFamily: fc, margin: '4px 0 0' }}>
+              Posts a progress event the orchestrator will see on its next channel read.
+            </p>
+          </div>
+          <button onClick={onClose} style={{ all: 'unset', cursor: 'pointer', fontSize: 18, color: colors.text.dim }}>&#10005;</button>
+        </div>
+
+        <div style={{ padding: '14px 22px 4px' }}>
+          <div style={{
+            fontSize: 10.5, color: colors.status.warning, fontFamily: fc,
+            background: `${colors.status.warning}10`, border: `1px solid ${colors.status.warning}30`,
+            padding: '6px 10px', borderRadius: 6, marginBottom: 12,
+            lineHeight: 1.45,
+          }}>
+            ⚠ Mid-phase changes may not apply. The orchestrator decides whether to act on this note — treat it as a hint, not a command.
+          </div>
+          <textarea
+            ref={taRef}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. Skip W3's database task — that subsystem is being rewritten in parallel."
+            rows={5}
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              background: 'rgba(0,0,0,0.4)', color: colors.text.primary,
+              border: `1px solid ${colors.border.subtle}`, borderRadius: 8,
+              padding: '10px 12px', fontFamily: fc, fontSize: 12, lineHeight: 1.55,
+              outline: 'none', resize: 'vertical',
+            }}
+          />
+          {error && (
+            <div style={{
+              marginTop: 8, padding: '6px 10px', borderRadius: 6,
+              background: `${colors.status.error}18`, border: `1px solid ${colors.status.error}40`,
+              color: colors.status.error, fontFamily: fc, fontSize: 11,
+            }}>{error}</div>
+          )}
+        </div>
+
+        <div style={{
+          display: 'flex', justifyContent: 'flex-end', gap: 8,
+          padding: '12px 22px 16px',
+        }}>
+          <button onClick={onClose} style={{
+            all: 'unset', cursor: 'pointer', padding: '6px 14px', borderRadius: 6,
+            color: colors.text.secondary, fontFamily: fc, fontSize: 12,
+            border: `1px solid ${colors.border.subtle}`,
+          }}>Cancel</button>
+          <button onClick={send} disabled={!note.trim() || sending} style={{
+            all: 'unset',
+            cursor: (!note.trim() || sending) ? 'not-allowed' : 'pointer',
+            padding: '6px 16px', borderRadius: 6,
+            color: '#fff', fontFamily: fc, fontSize: 12, fontWeight: 600,
+            background: (!note.trim() || sending) ? `${colors.accent.cyan}40` : colors.accent.cyan,
+            opacity: (!note.trim() || sending) ? 0.6 : 1,
+          }}>{sending ? 'Sending…' : 'Send'}</button>
+        </div>
+      </div>
     </div>
   );
 }

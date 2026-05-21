@@ -43,6 +43,7 @@ import BrowserPanel from './components/BrowserPanel';
 import CodeEditorPanel from './components/CodeEditorPanel';
 import NotificationsPanel from './components/NotificationsPanel';
 import ResizeHandle from './components/ResizeHandle';
+import SwarmOverlay from './components/glasshouse/SwarmOverlay';
 import { isAuthenticated, logout } from './lib/authService';
 
 const RIGHT_PANEL_WIDTH = 280;
@@ -219,6 +220,8 @@ function AppInner({ onLogout }) {
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
+  const [swarmOverlayOpen, setSwarmOverlayOpen] = useState(false);
+  const [swarmRuns, setSwarmRuns] = useState([]);
   const { setPalette, paletteName } = useTheme();
   const { activeData } = useContext(WorkspaceContext);
 
@@ -268,6 +271,13 @@ function AppInner({ onLogout }) {
         e.preventDefault();
         setCmdPaletteOpen((o) => !o);
       }
+      // Ctrl+Shift+S (or Cmd+Shift+S) — toggle the swarm view. Cmd+K is
+      // already the command palette; the swarm overlay gets its own
+      // chord so both stay reachable.
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'S' || e.key === 's')) {
+        e.preventDefault();
+        setSwarmOverlayOpen((o) => !o);
+      }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
@@ -279,6 +289,7 @@ function AppInner({ onLogout }) {
       { id: 'close-terminal', label: 'Close Terminal', category: 'Terminals', shortcut: 'Ctrl+W', onAction: () => window.dispatchEvent(new Event('flowade:closeTerminal')) },
       { id: 'cycle-focus', label: 'Cycle Focus', category: 'Terminals', shortcut: 'Ctrl+Tab', onAction: () => window.dispatchEvent(new Event('flowade:cycleFocus')) },
       { id: 'settings', label: 'Open Settings', category: 'Navigation', shortcut: 'Ctrl+,', onAction: () => setSettingsOpen(true) },
+      { id: 'swarm-view', label: 'Open Swarm View', category: 'Navigation', shortcut: 'Ctrl+Shift+S', onAction: () => setSwarmOverlayOpen(true) },
       { id: 'analytics', label: 'Reports & Analytics', category: 'Navigation', onAction: () => setAnalyticsOpen(true) },
       { id: 'help', label: 'Help Guide', category: 'Navigation', onAction: () => setHelpOpen(true) },
       { id: 'history', label: 'Session History', category: 'Navigation', onAction: () => setHistoryOpen(true) },
@@ -543,6 +554,7 @@ function AppInner({ onLogout }) {
         <NotificationsPanel open={notificationsOpen} onClose={() => setNotificationsOpen(false)} />
         <CommandPalette open={cmdPaletteOpen} onClose={() => setCmdPaletteOpen(false)} actions={cmdActions} />
         <MemoryPanel open={activeLeftPanel === 'memory'} onToggle={() => setActiveLeftPanel(null)} />
+        <SwarmOverlay open={swarmOverlayOpen} onClose={() => setSwarmOverlayOpen(false)} runs={swarmRuns} />
     </div>
   );
 }

@@ -11,6 +11,7 @@
     "dev:fresh": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron . --fresh\"",
     "build": "vite build && electron-builder",
     "start": "electron .",
+    "test": "vitest run",
     "postinstall": "node scripts/rebuild-pty.js && electron-builder install-app-deps"
   },
   "dependencies": {
@@ -38,6 +39,7 @@
     "react-dom": "^19.1.0",
     "recharts": "^2.15.3",
     "vite": "^6.3.5",
+    "vitest": "^4.1.7",
     "wait-on": "^8.0.3"
   },
   "build": {

@@ -258,11 +258,45 @@ contextBridge.exposeInMainWorld('flowade', {
     },
   },
 
+  swarm: {
+    onPaneAdded: (callback) => {
+      const handler = (_, rec) => callback(rec);
+      ipcRenderer.on('swarm:pane-added', handler);
+      return () => ipcRenderer.removeListener('swarm:pane-added', handler);
+    },
+    onPaneRemoved: (callback) => {
+      const handler = (_, payload) => callback(payload);
+      ipcRenderer.on('swarm:pane-removed', handler);
+      return () => ipcRenderer.removeListener('swarm:pane-removed', handler);
+    },
+    onPaneState: (callback) => {
+      const handler = (_, payload) => callback(payload);
+      ipcRenderer.on('swarm:pane-state', handler);
+      return () => ipcRenderer.removeListener('swarm:pane-state', handler);
+    },
+    runs: {
+      list: () => ipcRenderer.invoke('swarm:listRuns'),
+      get: (runId) => ipcRenderer.invoke('swarm:getRun', runId),
+      getTranscript: (runId, terminalId) => ipcRenderer.invoke('swarm:getTranscript', { runId, terminalId }),
+      replayChannel: (runId, limit) => ipcRenderer.invoke('swarm:replayChannel', { runId, limit }),
+      listActive: () => ipcRenderer.invoke('swarm:listActiveRuns'),
+    },
+    channel: {
+      post: (params) => ipcRenderer.invoke('swarm:channel:post', params),
+    },
+    purgeNow: (params) => ipcRenderer.invoke('swarm:purgeNow', params || {}),
+  },
+
   window: {
     minimize: () => ipcRenderer.send('window:minimize'),
     maximize: () => ipcRenderer.send('window:maximize'),
     close: () => ipcRenderer.send('window:close'),
     isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+    onMaximizedChange: (cb) => {
+      const handler = (_, isMax) => cb(isMax);
+      ipcRenderer.on('window:maximizedChanged', handler);
+      return () => ipcRenderer.removeListener('window:maximizedChanged', handler);
+    },
     popout: (terminalId, bounds) => ipcRenderer.invoke('window:popout', { terminalId, bounds }),
     popoutPanel: (panel, bounds) => ipcRenderer.invoke('window:popoutPanel', { panel, bounds }),
     closePopout: (windowId) => ipcRenderer.invoke('window:closePopout', windowId),

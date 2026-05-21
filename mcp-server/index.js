@@ -7,6 +7,10 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { supabase, restoreSession, getAuthUserId } from './supabaseClient.js';
 import { readEnvKey, warmSecretsCache } from './envReader.js';
+import { registerTerminalTools } from './tools/terminal.js';
+import { registerLeaseTools } from './tools/leases.js';
+import { registerChannelTools } from './tools/channel.js';
+import { registerSwarmTools } from './tools/swarm.js';
 
 const DATA_DIR = process.env.FLOWADE_DATA_DIR || join(
   process.platform === 'win32'
@@ -877,6 +881,16 @@ server.tool(
     return { content: [{ type: 'text', text: JSON.stringify(context, null, 2) }] };
   }
 );
+
+// Register swarm tool set on top of the existing memory / workspace /
+// tasks tools. Each registrar adds its own server.tool(...) entries;
+// they route through the swarm bridge (lazy WS client) when invoked
+// and surface SWARM_UNAVAILABLE cleanly when the desktop app is offline
+// or the user has 'swarm.allowAgentSpawn' off.
+registerTerminalTools(server);
+registerLeaseTools(server);
+registerChannelTools(server);
+registerSwarmTools(server);
 
 // Restore auth session from shared storage + warm the secret cache, then
 // start server. Both must complete before tools that need API keys / auth.

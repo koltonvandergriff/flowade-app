@@ -18,6 +18,18 @@ import { MemoryStore } from './memoryStore.js';
 import { TerminalNotifier } from './terminalNotifier.js';
 import { setAuthSession, getAuthUser, clearAuthSession, supabase } from './supabaseClient.js';
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'fs';
+import { swarmBridge } from './swarmBridge.js';
+import { paneRegistry } from './paneRegistry.js';
+import { registerTerminalHandlers } from './swarmTerminalHandlers.js';
+import { registerLeaseBridgeHandlers } from './leaseRegistry.js';
+import { swarmChannel } from './swarmChannel.js';
+import { registerOrchestrationHandlers, listActiveRuns as listActiveSwarmRuns } from './swarmOrchestration.js';
+import { setMemoryStore as setSwarmAuditMemoryStore } from './swarmAudit.js';
+import { listRuns as listSwarmRuns, getRun as getSwarmRun, getTranscript as getSwarmTranscript, purgeOldRuns as purgeSwarmOldRuns } from './swarmTranscriptStore.js';
+import { recoverOrphans as recoverSwarmOrphans } from './swarmRecovery.js';
+import { transition as swarmStateTransition, SwarmState } from './swarmStates.js';
+import { writeRunMeta as writeSwarmRunMeta } from './swarmTranscriptStore.js';
+import { getStartCommand as getProviderStartCommand } from './providerRegistry.js';
 
 const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -57,6 +69,38 @@ memoryStore.setOnStatusChange((status) => {
 const terminalNotifier = new TerminalNotifier(envStore, (event) => {
   mainWindow?.webContents.send('notify:event', event);
 });
+
+// Forward swarm pane lifecycle to all renderer windows. WorkspaceContext
+// subscribes to these so swarm-spawned orchestrator + worker panes mount
+// as visible tiles, themed and badged via swarmTheme.js. User-initiated
+// panes (ownerType='user') already exist in the renderer state — main
+// echoes them too as a harmless dedup-safe `swarm:pane-added` event so
+// WorkspaceContext can skip the upsert when the id is already present.
+paneRegistry.on('pane:register', (rec) => {
+  if (!rec) return;
+  mainWindow?.webContents.send('swarm:pane-added', rec);
+  for (const [, win] of childWindows) {
+    if (!win.isDestroyed()) win.webContents.send('swarm:pane-added', rec);
+  }
+});
+paneRegistry.on('pane:closed', (payload) => {
+  mainWindow?.webContents.send('swarm:pane-removed', payload);
+  for (const [, win] of childWindows) {
+    if (!win.isDestroyed()) win.webContents.send('swarm:pane-removed', payload);
+  }
+});
+paneRegistry.on('pane:state-change', (payload) => {
+  mainWindow?.webContents.send('swarm:pane-state', payload);
+  for (const [, win] of childWindows) {
+    if (!win.isDestroyed()) win.webContents.send('swarm:pane-state', payload);
+  }
+});
+
+// Inject the live MemoryStore into the swarm audit helper so spawn /
+// kill / claim / cancel events surface in the user's vault under
+// Swarm / Audit (per migration 010). Audit failures are swallowed
+// inside swarmAudit.js so they never block a swarm run.
+setSwarmAuditMemoryStore(memoryStore);
 
 (async () => {
   // Wait for the keychain to populate the in-memory secret cache so that
@@ -115,11 +159,6 @@ function createWindow() {
     show: false,
     frame: false,
     titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#1a1b32',
-      symbolColor: '#6a6b85',
-      height: 38,
-    },
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -173,6 +212,8 @@ function createWindow() {
     // Initialize auto-updater after the window is visible
     initAutoUpdater(mainWindow);
   });
+
+  bindWindowStateEvents(mainWindow);
 
   mainWindow.on('close', (e) => {
     // Persist windowed bounds + maximized state. When maximized,
@@ -265,6 +306,25 @@ ipcMain.handle('terminal:spawn', (_, opts) => {
 
   const info = ptyManager.spawn(id, opts);
 
+  // Mirror this pane into the paneRegistry so swarm tools can see it.
+  // Swarm-spawned panes are already registered upstream (orchestration
+  // / swarmTerminalHandlers call register first, then the renderer
+  // mounts and lands here) — paneRegistry.get tells us which path we
+  // took. User-initiated panes never touch swarm code so they need to
+  // be registered here as ownerType='user'.
+  if (!paneRegistry.get(id)) {
+    try {
+      paneRegistry.register(id, {
+        provider: opts.provider || 'claude',
+        sessionName: opts.label || opts.sessionName || 'Session',
+        workspace: opts.workspace || 'Default',
+        ownerType: 'user',
+        teamId: null,
+        spawnedBy: null,
+      });
+    } catch (_) { /* race-safe: ignore double-register */ }
+  }
+
   if (!info.existing) {
     terminalNotifier.registerTerminal(id, { label: opts.label || id, workspace: opts.workspace || 'Default' });
 
@@ -287,6 +347,27 @@ ipcMain.handle('terminal:spawn', (_, opts) => {
       }
       terminalNotifier.processExit(id, exitCode);
     });
+
+    // Swarm-spawned panes stash a system-prompt + task in paneRegistry
+    // (orchestrator gets the orchestrator.md template + task; workers
+    // get worker.md + wait-for-dispatch instruction). The renderer's
+    // TerminalPane fires `claude\r` at +500ms to boot the agent. We
+    // wait another ~4s so the CLI is past its startup screen, then
+    // write the prompt. The Enter keystroke is sent as a SEPARATE write
+    // after a brief settle delay — claude CLI's bracketed-paste detector
+    // otherwise buffers the trailing \r as part of the paste content and
+    // the user is left manually pressing Enter on every pane. Cleared
+    // after dispatch so we never replay it.
+    const initialPrompt = paneRegistry.getInitialPrompt(id);
+    if (initialPrompt) {
+      setTimeout(() => {
+        try { ptyManager.write(id, initialPrompt); } catch (_) { /* pty may have died */ }
+        setTimeout(() => {
+          try { ptyManager.write(id, '\r'); } catch (_) {}
+          try { paneRegistry.clearInitialPrompt(id); } catch (_) {}
+        }, 400);
+      }, 4500);
+    }
   }
 
   info.scrollback = info.existing ? ptyManager.getScrollback(id) : '';
@@ -295,6 +376,12 @@ ipcMain.handle('terminal:spawn', (_, opts) => {
 
 ipcMain.on('terminal:write', (_, { id, data }) => {
   ptyManager.write(id, data);
+  // Stamp the active user pane so swarm orchestration can identify the
+  // originating pane via "most-recently-typed-in" rather than the wrong
+  // heuristics (createdAt picks a fresher-but-empty pane; tokenSeq is
+  // only fed by headless ptys). Best-effort — the pane may not be in
+  // the registry yet during early renderer bootstrap.
+  try { paneRegistry.bumpInput?.(id); } catch (_) {}
 });
 
 ipcMain.on('terminal:resize', (_, { id, cols, rows }) => {
@@ -303,10 +390,128 @@ ipcMain.on('terminal:resize', (_, { id, cols, rows }) => {
 
 ipcMain.on('terminal:kill', (_, { id }) => {
   ptyManager.kill(id);
+  try { paneRegistry.unregister(id); } catch (_) { /* not in registry — fine */ }
 });
 
 ipcMain.handle('terminal:list', () => {
   return ptyManager.list();
+});
+
+// Spawn a headless swarm pane: main owns the pty, no UI tile, output
+// piped into paneRegistry's ring buffer so transcripts survive for
+// finish/cancel capture. The caller is responsible for registering the
+// pane in paneRegistry — this just stands up the pty + writes the
+// provider boot command + schedules the initial prompt injection.
+function spawnHeadlessPane(paneId, opts = {}) {
+  const provider = opts.provider || 'claude';
+  const cwd = opts.cwd || join(process.env.USERPROFILE || process.env.HOME, 'Desktop', 'Claude');
+
+  // Same MCP config write the renderer-spawned terminal path does so
+  // the bot's claude session has FlowADE MCP tools available.
+  if (provider === 'claude' || provider === 'aider') {
+    try { ensureMcpConfig(cwd); } catch (_) {}
+  }
+
+  const info = ptyManager.spawn(paneId, { cwd });
+  if (info && info.existing) return info;
+
+  // Pipe pty output into the ring buffer (transcript capture). We do
+  // NOT forward to webContents.send — these panes are invisible to the
+  // renderer by design.
+  ptyManager.onData(paneId, (data) => {
+    try {
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
+      paneRegistry.appendOutput(paneId, buf);
+    } catch (_) { /* pane may have been unregistered concurrently */ }
+  });
+  ptyManager.onExit(paneId, () => {
+    try { paneRegistry.unregister(paneId); } catch (_) {}
+  });
+
+  // Boot the provider CLI inside the pty. 500ms gives the shell time
+  // to print its first prompt before we type into it.
+  setTimeout(() => {
+    const cmd = getProviderStartCommand(provider);
+    if (cmd) {
+      try { ptyManager.write(paneId, cmd + '\r'); } catch (_) {}
+    }
+  }, 500);
+
+  // Inject the staged system prompt (orchestrator.md / worker.md + task)
+  // once the CLI has settled. 4.5s is conservative for claude cold-boot;
+  // bumpable if cold launches consistently overrun. Enter is sent as a
+  // SEPARATE write 400ms after the paste so claude CLI doesn't buffer
+  // the trailing \r as paste content (otherwise user has to manually
+  // press Enter on every pane).
+  setTimeout(() => {
+    const prompt = paneRegistry.getInitialPrompt(paneId);
+    if (prompt) {
+      try { ptyManager.write(paneId, prompt); } catch (_) {}
+      setTimeout(() => {
+        try { ptyManager.write(paneId, '\r'); } catch (_) {}
+        try { paneRegistry.clearInitialPrompt(paneId); } catch (_) {}
+      }, 400);
+    }
+  }, 4500);
+
+  return info;
+}
+
+// --- Swarm Runs IPC (transcript archive for the future Swarm Runs UI) ---
+ipcMain.handle('swarm:listRuns', () => {
+  try { return listSwarmRuns(); } catch (err) { console.error('[swarm:listRuns]', err); return []; }
+});
+ipcMain.handle('swarm:getRun', (_, runId) => {
+  try { return getSwarmRun(runId); } catch (err) { console.error('[swarm:getRun]', err); return null; }
+});
+ipcMain.handle('swarm:getTranscript', (_, { runId, terminalId }) => {
+  try { return getSwarmTranscript(runId, terminalId); } catch (err) { console.error('[swarm:getTranscript]', err); return null; }
+});
+ipcMain.handle('swarm:listActiveRuns', () => {
+  try { return listActiveSwarmRuns(); } catch (err) { console.error('[swarm:listActiveRuns]', err); return []; }
+});
+// Retention is persisted on the renderer side under localStorage (per
+// existing settings pattern). The renderer passes the current value
+// into the purge IPC; main mirrors it into settingsStore so the boot
+// auto-purge has something to read before any renderer window mounts.
+ipcMain.handle('swarm:purgeNow', (_, params) => {
+  try {
+    const retentionDays = (params && Number.isFinite(params.retentionDays))
+      ? params.retentionDays
+      : (settingsStore.get('swarm.retentionDays') || 30);
+    if (params && Number.isFinite(params.retentionDays)) {
+      settingsStore.set('swarm.retentionDays', params.retentionDays);
+    }
+    if (params && typeof params.purgeEnabled === 'boolean') {
+      settingsStore.set('swarm.purgeEnabled', params.purgeEnabled);
+    }
+    return purgeSwarmOldRuns({ retentionDays });
+  } catch (err) {
+    console.error('[swarm:purgeNow]', err?.message || err);
+    return { purged: 0, scanned: 0, errors: [{ error: err?.message || String(err) }] };
+  }
+});
+
+// User-initiated channel post. The MCP bridge has a similar entry point
+// for agents — this version is gated for the renderer so a user pane
+// can inject a note ("Inject note to swarm" action) mid-run without
+// having to spawn an MCP session.
+ipcMain.handle('swarm:channel:post', async (_, { runId, workerId, kind, payload }) => {
+  try {
+    return await swarmChannel.post({ runId, workerId, kind, payload });
+  } catch (err) {
+    console.error('[swarm:channel:post]', err?.message || err);
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+ipcMain.handle('swarm:replayChannel', async (_, { runId, limit }) => {
+  if (!runId) return { events: [], latestTokenId: 0 };
+  try {
+    return await swarmChannel.read({ runId, sinceTokenId: 0, limit: limit || 1000 });
+  } catch (err) {
+    console.error('[swarm:replayChannel]', err?.message || err);
+    return { events: [], latestTokenId: 0, error: err?.message || String(err) };
+  }
 });
 
 // --- Notification IPC ---
@@ -919,6 +1124,17 @@ ipcMain.on('window:maximize', () => {
 ipcMain.on('window:close', () => mainWindow?.close());
 ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized() ?? false);
 
+// Forward maximize/unmaximize events so the custom titlebar can swap
+// its restore/maximize icon without having to poll isMaximized.
+function bindWindowStateEvents(win, channel = 'window:maximizedChanged') {
+  if (!win) return;
+  const emit = () => { try { win.webContents.send(channel, win.isMaximized()); } catch { /* window destroyed */ } };
+  win.on('maximize', emit);
+  win.on('unmaximize', emit);
+  win.on('enter-full-screen', emit);
+  win.on('leave-full-screen', emit);
+}
+
 // --- Popout window IPC ---
 
 ipcMain.handle('window:popout', (_, { terminalId, bounds }) => {
@@ -934,11 +1150,6 @@ ipcMain.handle('window:popout', (_, { terminalId, bounds }) => {
     backgroundColor: '#161729',
     frame: false,
     titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#1a1b32',
-      symbolColor: '#6a6b85',
-      height: 38,
-    },
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -1070,6 +1281,74 @@ app.whenReady().then(() => {
     claudeUsageWatcher.pruneOldEntries();
     claudeUsageWatcher.pruneStaleCursors();
   }, 24 * 60 * 60 * 1000);
+
+  // Swarm bridge. Only starts when the user has flipped
+  // 'swarm.allowAgentSpawn' on in Settings → Integrations. When OFF,
+  // start() returns { started: false } and we no-op — the WS server
+  // never binds, the keychain token is never generated, no port file
+  // is written. With the toggle ON, register every bridge handler so
+  // the MCP server can dispatch terminal / lease / channel / swarm
+  // methods over the wire.
+  (async () => {
+    try {
+      const r = await swarmBridge.start({ settingsStore });
+      if (r.started) {
+        registerTerminalHandlers(swarmBridge, { paneRegistry, ptyManager, spawnHeadlessPane });
+        registerLeaseBridgeHandlers(swarmBridge);
+        swarmChannel.registerBridge(swarmBridge);
+        registerOrchestrationHandlers(swarmBridge, { ptyManager });
+        console.log(`[Swarm] Bridge listening on 127.0.0.1:${r.port}`);
+
+        // Auto-purge old transcripts if the user has the toggle on
+        // (default ON). Reads the mirrored value from settingsStore so
+        // the boot path doesn't depend on a renderer window being live
+        // yet — the renderer pushes any change through swarm:purgeNow.
+        try {
+          const purgeEnabled = settingsStore.get('swarm.purgeEnabled');
+          const enabled = purgeEnabled === undefined ? true : !!purgeEnabled;
+          if (enabled) {
+            const days = settingsStore.get('swarm.retentionDays') || 30;
+            const purgeReport = purgeSwarmOldRuns({ retentionDays: days });
+            if (purgeReport.purged > 0) {
+              console.log(`[Swarm] Auto-purged ${purgeReport.purged} run dir(s) older than ${purgeReport.retentionDays} days (scanned ${purgeReport.scanned})`);
+            }
+            if (purgeReport.errors && purgeReport.errors.length) {
+              console.warn('[Swarm] Purge errors:', purgeReport.errors);
+            }
+          }
+        } catch (purgeErr) {
+          console.error('[Swarm] auto-purge threw:', purgeErr?.message || purgeErr);
+        }
+
+        // Reconcile any non-terminal runs that didn't finish before the
+        // last process exit (Electron crash, force-quit, OS reboot). Runs
+        // with stale `updatedAt` (>1h) get marked CRASHED so the Swarm
+        // Runs UI doesn't show them as "Planning" forever.
+        try {
+          const report = await recoverSwarmOrphans({
+            swarmChannel,
+            transition: async ({ runId, to, reason, extra }) => swarmStateTransition(
+              { runId, to, reason, extra },
+              { writeRunMeta: writeSwarmRunMeta, audit: null, getCurrentState: () => null }
+            ),
+            listRuns: listSwarmRuns,
+          });
+          if (report.recovered > 0) {
+            console.log(`[Swarm] Recovered ${report.recovered} orphan run(s) (scanned ${report.scanned})`);
+          }
+          if (report.errors && report.errors.length) {
+            console.warn('[Swarm] Recovery errors:', report.errors);
+          }
+        } catch (recErr) {
+          console.error('[Swarm] orphan recovery threw:', recErr?.message || recErr);
+        }
+      } else {
+        console.log('[Swarm] Bridge disabled (swarm.allowAgentSpawn = false)');
+      }
+    } catch (e) {
+      console.error('[Swarm] Bridge failed to start:', e?.message || e);
+    }
+  })();
 });
 
 app.on('window-all-closed', () => {
@@ -1079,6 +1358,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   forceQuit = true;
   claudeUsageWatcher.stop();
+  swarmBridge.stop().catch(() => {});
 });
 
 app.on('activate', () => {

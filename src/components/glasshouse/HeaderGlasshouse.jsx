@@ -6,6 +6,7 @@
 //   - Same Electron window controls + version tag
 import { useState, useRef, useEffect } from 'react';
 import WorkspaceSwitcher from '../WorkspaceSwitcher';
+import WindowControls from '../WindowControls';
 import logoFa from '../../assets/branding/logo-fa.png';
 
 const fontMono = 'var(--gh-font-mono, "JetBrains Mono", monospace)';
@@ -188,26 +189,10 @@ export default function HeaderGlasshouse({
 
         {/* Electron window controls */}
         {isElectron && (
-          <div style={{ display: 'flex', gap: 2, marginLeft: 6 }}>
-            <button onClick={() => window.flowade.window.minimize()} style={btnStyle}
-              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
-              <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5" stroke="#94a3b8" strokeWidth="1.5" /></svg>
-            </button>
-            <button onClick={() => window.flowade.window.maximize()} style={btnStyle}
-              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
-              <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="#94a3b8" strokeWidth="1.5" /></svg>
-            </button>
-            <button onClick={() => window.flowade.window.close()} style={btnStyle}
-              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,107,107,0.25)'}
-              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
-              <svg width="10" height="10" viewBox="0 0 10 10">
-                <line x1="2" y1="2" x2="8" y2="8" stroke="#94a3b8" strokeWidth="1.5" />
-                <line x1="8" y1="2" x2="2" y2="8" stroke="#94a3b8" strokeWidth="1.5" />
-              </svg>
-            </button>
-          </div>
+          <WindowControls colors={{
+            text: { dim: '#94a3b8', primary: '#e6edf7' },
+            bg: { overlay: 'rgba(255,255,255,0.06)', glass: '#0a0e1c', surface: '#0a0e1c' },
+          }} />
         )}
       </div>
     </header>

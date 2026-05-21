@@ -1,10 +1,12 @@
-import { useState, useCallback, useContext, useEffect, useRef } from 'react';
+import { useMemo, useState, useCallback, useContext, useEffect, useRef } from 'react';
 import { FONTS, LAYOUTS } from '../lib/constants';
 import { useTheme } from '../hooks/useTheme';
 import { isGlasshouseEnabled } from '../lib/glasshouseTheme';
 import { WorkspaceContext } from '../contexts/WorkspaceContext';
 import { SettingsContext } from '../contexts/SettingsContext';
 import TerminalPane from './TerminalPane';
+import PaneBadge from './swarm/PaneBadge';
+import { getSwarmPaneStyle, getTeamTheme, getUserPaneStyle, getUserHue } from '../lib/swarmTheme';
 import ResizeHandle from './ResizeHandle';
 import TerminalWizardGlasshouse from './glasshouse/TerminalWizardGlasshouse';
 import MassCloseDialogGlasshouse from './glasshouse/MassCloseDialogGlasshouse';
@@ -19,12 +21,55 @@ export default function TerminalGrid({ dangerFlags, onToggleDanger }) {
   const [dragId, setDragId] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
   const [focusedId, setFocusedId] = useState(null);
+  const [hoveredId, setHoveredId] = useState(null);
   const [paneSizes, setPaneSizes] = useState(null);
   const gridRef = useRef(null);
 
   const layout = activeData?.layout || '2x1';
   const workspaceName = activeData?.name || 'Workspace';
   const terminals = activeData?.terminals || [];
+
+  // Build a swarm pane → root user pane map. Workers' `spawnedBy` points
+  // at their orchestrator; orchestrator's `spawnedBy` is the user pane
+  // that called flowade_swarm_start. Walking the chain gives us a single
+  // teamRoot id per swarm pane so the UI can draw "← from <user>" badges
+  // and team-wide hover glows without re-traversing per render.
+  const teamRoot = useMemo(() => {
+    const byId = new Map(terminals.map((t) => [t.id, t]));
+    const cache = new Map();
+    const walk = (id, seen = new Set()) => {
+      if (!id || seen.has(id)) return null;
+      seen.add(id);
+      if (cache.has(id)) return cache.get(id);
+      const t = byId.get(id);
+      if (!t) return null;
+      const root = (!t.ownerType || t.ownerType === 'user') ? t.id : walk(t.spawnedBy, seen);
+      cache.set(id, root);
+      return root;
+    };
+    const out = new Map();
+    for (const t of terminals) out.set(t.id, walk(t.id));
+    return out;
+  }, [terminals]);
+
+  // Team-wide highlight: hovering any pane lights up every pane sharing
+  // the same root user pane (one level deeper than teamId, so even
+  // multi-swarm setups stay disambiguated).
+  const highlightedRoot = hoveredId ? teamRoot.get(hoveredId) : null;
+
+  // Reverse index: which user panes are currently acting as the root of
+  // at least one swarm pane. Lets the renderer paint the warm-tint
+  // border on "active" user panes without paying a per-render scan.
+  const activeRootIds = useMemo(() => {
+    const set = new Set();
+    for (const t of terminals) {
+      if (t.ownerType && t.ownerType !== 'user') {
+        const r = teamRoot.get(t.id);
+        if (r) set.add(r);
+      }
+    }
+    return set;
+  }, [terminals, teamRoot]);
 
   // Compose display labels as Workspace:Provider:SessionName with a :N
   // suffix only when the same combo appears more than once. sessionName
@@ -287,8 +332,58 @@ export default function TerminalGrid({ dangerFlags, onToggleDanger }) {
     return null;
   }
 
-  const renderPane = (t, style) => (
-    <div key={t.id} style={style} onClick={() => setFocusedId(t.id)}>
+  const renderPane = (t, style) => {
+    // Three pane treatments live in the same grid:
+    //   - user panes get a warm gold top-cap (and full warm border when
+    //     they're the active root of a swarm). They wear a USER badge.
+    //   - swarm panes get a team-colored ring + role badge + "from"
+    //     footer linking back to their root user pane.
+    //   - bare user panes (no swarm) read as a plain glass tile.
+    const isSwarmPane = !!(t.ownerType && t.ownerType !== 'user');
+    const isUserPane = !isSwarmPane;
+    const isUserActiveRoot = isUserPane && activeRootIds.has(t.id);
+    const swarmStyle = getSwarmPaneStyle({ ownerType: t.ownerType, teamId: t.teamId });
+    const userStyle = isUserPane ? getUserPaneStyle({ isSwarmRoot: isUserActiveRoot }) : null;
+    const userHue = isUserPane ? getUserHue() : null;
+    const rootId = teamRoot.get(t.id);
+    const inHoveredTeam = !!(highlightedRoot && rootId && highlightedRoot === rootId && hoveredId !== t.id);
+    const theme = isSwarmPane ? getTeamTheme(t.teamId) : null;
+    // Look up the spawning user pane so we can show "from <name>" on
+    // swarm panes. Walks to the team root (a user pane id) via teamRoot.
+    const rootTerm = isSwarmPane && rootId && rootId !== t.id ? terminals.find((x) => x.id === rootId) : null;
+    const rootLabel = rootTerm ? (composed.get(rootTerm.id)?.session || rootTerm.sessionName || rootTerm.label || 'user') : null;
+
+    // Cross-team highlight when the user is hovering a sibling. Layered
+    // over the existing swarmStyle so the team accent reads through.
+    const highlightOutline = inHoveredTeam && theme
+      ? { outline: `2px solid ${theme.accent}`, outlineOffset: 2 }
+      : null;
+    // The hovered pane itself gets a slightly more emphatic team ring so
+    // the eye lands on the origin of the highlight cluster.
+    const selfHoverGlow = isSwarmPane && hoveredId === t.id && theme
+      ? { boxShadow: `${swarmStyle?.boxShadow || ''}, 0 0 0 2px ${theme.accent}` }
+      : null;
+
+    return (
+    <div
+      key={t.id}
+      style={{
+        position: 'relative',
+        ...(swarmStyle ? { borderRadius: 12, ...swarmStyle } : {}),
+        ...(userStyle ? { borderRadius: 12, ...userStyle } : {}),
+        ...(highlightOutline || {}),
+        ...(selfHoverGlow || {}),
+        transition: 'outline-color 160ms ease, box-shadow 200ms ease, border-color 200ms ease',
+        ...style,
+      }}
+      onClick={() => setFocusedId(t.id)}
+      onMouseEnter={() => setHoveredId(t.id)}
+      onMouseLeave={() => setHoveredId((curr) => (curr === t.id ? null : curr))}
+    >
+      {/* Role badges live inside the pane header (passed via the
+          swarmIdentity prop on TerminalPane) so they're part of the
+          chrome instead of floating over it. The pane's outer ring
+          color still encodes team membership at a glance. */}
       {t.pending ? (
         <div style={{
           flex: 1, display: 'flex', flexDirection: 'column',
@@ -330,10 +425,18 @@ export default function TerminalGrid({ dangerFlags, onToggleDanger }) {
           onDragEnd={() => { setDragId(null); setDropTarget(null); }}
           onDragOver={() => setDropTarget(t.id)}
           onDrop={() => handleDrop(t.id)}
+          swarmIdentity={{
+            ownerType: t.ownerType || 'user',
+            teamId: t.teamId,
+            workerIndex: t.workerIndex,
+            isUserActiveRoot,
+            rootLabel: isSwarmPane ? rootLabel : null,
+          }}
         />
       )}
     </div>
-  );
+    );
+  };
 
   const rows = layoutDef.rows || 1;
   const colSizes = paneSizes?.col || Array(layoutDef.cols).fill(100 / layoutDef.cols);
