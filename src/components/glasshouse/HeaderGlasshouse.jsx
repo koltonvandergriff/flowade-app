@@ -8,11 +8,11 @@ import { useState, useRef, useEffect } from 'react';
 import WorkspaceSwitcher from '../WorkspaceSwitcher';
 import logoFa from '../../assets/branding/logo-fa.png';
 
-const fontMono = 'var(--gh-font-mono, "JetBrains Mono", monospace)';
-const fontTechno = 'var(--gh-font-techno, "Chakra Petch", sans-serif)';
+const fontMono = 'var(--gh-font-mono)';
+const fontTechno = 'var(--gh-font-techno)';
 
 function MenuDivider() {
-  return <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '4px 8px' }} />;
+  return <div style={{ height: 1, background: 'var(--gh-line)', margin: '4px 8px' }} />;
 }
 
 function MenuItem({ icon, label, onClick, accent }) {
@@ -22,19 +22,19 @@ function MenuItem({ icon, label, onClick, accent }) {
       style={{
         all: 'unset', cursor: 'pointer',
         display: 'flex', alignItems: 'center', gap: 10,
-        padding: '8px 14px', fontSize: 12,
+        padding: '8px 14px', fontSize: 'var(--gh-text-12)',
         fontFamily: fontMono,
-        color: '#94a3b8',
+        color: 'var(--gh-ink-mute)',
         transition: 'background 0.12s, color 0.12s',
-        width: '100%', boxSizing: 'border-box', borderRadius: 4,
+        width: '100%', boxSizing: 'border-box', borderRadius: 'var(--gh-radius-sm)',
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = 'rgba(77,230,240,0.08)';
-        e.currentTarget.style.color = accent || '#f1f5f9';
+        e.currentTarget.style.background = 'var(--gh-cy-tint-08)';
+        e.currentTarget.style.color = accent || 'var(--gh-ink)';
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.background = 'transparent';
-        e.currentTarget.style.color = '#94a3b8';
+        e.currentTarget.style.color = 'var(--gh-ink-mute)';
       }}
     >
       <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, flexShrink: 0 }}>{icon}</span>
@@ -63,14 +63,14 @@ export default function HeaderGlasshouse({
 
   const handleMenuItem = (fn) => { setMenuOpen(false); fn?.(); };
 
-  const iconProps = { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: '#4a5168', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' };
+  const iconProps = { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'var(--gh-ink-dim)', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' };
   const menuIconProps = { ...iconProps, stroke: 'currentColor', width: 15, height: 15 };
 
   const btnStyle = {
     all: 'unset', cursor: 'pointer',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    width: 28, height: 28, borderRadius: 6,
-    transition: 'all 0.15s',
+    width: 28, height: 28, borderRadius: 'var(--gh-radius-sm)',
+    transition: 'all 0.15s var(--gh-ease)',
   };
 
   return (
@@ -78,10 +78,10 @@ export default function HeaderGlasshouse({
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '8px 16px',
-        borderBottom: '1px solid rgba(77,230,240,0.07)',
-        background: 'rgba(8, 8, 18, 0.55)',
+        borderBottom: '1px solid var(--gh-cy-tint-07)',
+        background: 'var(--gh-glass-bar)',
         backdropFilter: 'blur(14px) saturate(1.1)',
-        boxShadow: 'inset 0 -1px 0 rgba(77,230,240,0.04)',
+        boxShadow: 'inset 0 -1px 0 var(--gh-cy-tint-04)',
         position: 'sticky', top: 0, zIndex: 10,
         WebkitAppRegion: 'drag',
       }}
@@ -93,13 +93,13 @@ export default function HeaderGlasshouse({
           alt="FA"
           style={{
             width: 28, height: 28, objectFit: 'contain',
-            filter: 'drop-shadow(0 0 10px rgba(77,230,240,0.4))',
+            filter: 'drop-shadow(0 0 10px var(--gh-cy-tint-40))',
           }}
         />
         <div style={{
           fontFamily: fontTechno,
-          fontWeight: 600, fontSize: 13, letterSpacing: '0.18em',
-          color: '#f1f5f9', textTransform: 'uppercase',
+          fontWeight: 600, fontSize: 'var(--gh-text-13)', letterSpacing: '0.18em',
+          color: 'var(--gh-ink)', textTransform: 'uppercase',
         }}>
           FlowADE
         </div>
@@ -118,11 +118,11 @@ export default function HeaderGlasshouse({
             onClick={() => setMenuOpen((o) => !o)}
             style={{
               ...btnStyle,
-              background: menuOpen ? 'rgba(77,230,240,0.12)' : 'transparent',
-              color: menuOpen ? '#4de6f0' : '#94a3b8',
+              background: menuOpen ? 'var(--gh-cy-tint-12)' : 'transparent',
+              color: menuOpen ? 'var(--gh-cy)' : 'var(--gh-ink-mute)',
             }}
             title="Menu"
-            onMouseEnter={(e) => { if (!menuOpen) e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
+            onMouseEnter={(e) => { if (!menuOpen) e.currentTarget.style.background = 'var(--gh-hover-05)'; }}
             onMouseLeave={(e) => { if (!menuOpen) e.currentTarget.style.background = 'transparent'; }}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -136,18 +136,18 @@ export default function HeaderGlasshouse({
             <div style={{
               position: 'absolute', top: '100%', right: 0, marginTop: 6,
               width: 220,
-              background: 'rgba(10, 14, 24, 0.96)',
-              border: '1px solid rgba(77,230,240,0.15)',
-              borderRadius: 10, padding: '6px 4px',
+              background: 'var(--gh-glass-strong)',
+              border: '1px solid var(--gh-cy-tint-15)',
+              borderRadius: 'var(--gh-radius-md)', padding: '6px 4px',
               backdropFilter: 'blur(20px) saturate(1.2)',
-              boxShadow: '0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(77,230,240,0.04)',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px var(--gh-cy-tint-04)',
               zIndex: 50,
             }}>
               <MenuItem label="Help" onClick={() => handleMenuItem(onOpenHelp)}
                 icon={<svg {...menuIconProps}><circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg>} />
               <MenuItem label="Session History" onClick={() => handleMenuItem(onOpenHistory)}
                 icon={<svg {...menuIconProps}><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>} />
-              <MenuItem label="Reports & Analytics" accent="#4de6f0" onClick={() => handleMenuItem(onOpenAnalytics)}
+              <MenuItem label="Reports & Analytics" accent="var(--gh-cy)" onClick={() => handleMenuItem(onOpenAnalytics)}
                 icon={<svg {...menuIconProps}><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>} />
               <MenuItem label="Prompt Templates" onClick={() => handleMenuItem(onOpenPrompts)}
                 icon={<svg {...menuIconProps}><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>} />
@@ -172,7 +172,7 @@ export default function HeaderGlasshouse({
 
               <MenuDivider />
 
-              <MenuItem label="Settings" accent="#4de6f0" onClick={() => handleMenuItem(onOpenSettings)}
+              <MenuItem label="Settings" accent="var(--gh-cy)" onClick={() => handleMenuItem(onOpenSettings)}
                 icon={<svg {...menuIconProps}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" /></svg>} />
             </div>
           )}
@@ -180,8 +180,8 @@ export default function HeaderGlasshouse({
 
         {/* Version tag */}
         <span style={{
-          fontFamily: fontMono, fontSize: 9, letterSpacing: '0.05em',
-          color: '#4a5168', marginLeft: 2,
+          fontFamily: fontMono, fontSize: 'var(--gh-text-9)', letterSpacing: '0.05em',
+          color: 'var(--gh-ink-dim)', marginLeft: 2,
         }}>
           v{window.flowade?.version || '0.1.0'}
         </span>
@@ -190,21 +190,21 @@ export default function HeaderGlasshouse({
         {isElectron && (
           <div style={{ display: 'flex', gap: 2, marginLeft: 6 }}>
             <button onClick={() => window.flowade.window.minimize()} style={btnStyle}
-              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--gh-hover-05)'}
               onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
-              <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5" stroke="#94a3b8" strokeWidth="1.5" /></svg>
+              <svg width="10" height="10" viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5" stroke="var(--gh-ink-mute)" strokeWidth="1.5" /></svg>
             </button>
             <button onClick={() => window.flowade.window.maximize()} style={btnStyle}
-              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--gh-hover-05)'}
               onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
-              <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="#94a3b8" strokeWidth="1.5" /></svg>
+              <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" fill="none" stroke="var(--gh-ink-mute)" strokeWidth="1.5" /></svg>
             </button>
             <button onClick={() => window.flowade.window.close()} style={btnStyle}
-              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,107,107,0.25)'}
+              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--gh-rd-tint-25)'}
               onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
               <svg width="10" height="10" viewBox="0 0 10 10">
-                <line x1="2" y1="2" x2="8" y2="8" stroke="#94a3b8" strokeWidth="1.5" />
-                <line x1="8" y1="2" x2="2" y2="8" stroke="#94a3b8" strokeWidth="1.5" />
+                <line x1="2" y1="2" x2="8" y2="8" stroke="var(--gh-ink-mute)" strokeWidth="1.5" />
+                <line x1="8" y1="2" x2="2" y2="8" stroke="var(--gh-ink-mute)" strokeWidth="1.5" />
               </svg>
             </button>
           </div>
